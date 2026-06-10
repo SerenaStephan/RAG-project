@@ -8,6 +8,49 @@ import {
   fetchConversation,
 } from "@/lib/ragApi";
 
+// ── Custom Tour ───────────────────────────────────────────────────────────────
+const TOUR_STEPS = [
+  { title: "Conversation History", body: "All your past chats are saved here automatically. Click any conversation to resume it." },
+  { title: "New Chat", body: "Click '+ New Chat' to start a fresh conversation at any time." },
+  { title: "Ask a Question", body: "Type your question and press Enter to send. Use Shift+Enter for a new line." },
+  { title: "Streaming Answers", body: "Answers stream in word by word. Source page references appear below each response." },
+];
+
+function Tour({ onClose }) {
+  const [step, setStep] = useState(0);
+  const current = TOUR_STEPS[step];
+  const isLast = step === TOUR_STEPS.length - 1;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-background border border-border rounded-2xl shadow-xl p-6 w-80 flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">
+            {step + 1} / {TOUR_STEPS.length}
+          </span>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-sm">
+            Skip
+          </button>
+        </div>
+        <div>
+          <h3 className="font-semibold text-base mb-1">{current.title}</h3>
+          <p className="text-sm text-muted-foreground">{current.body}</p>
+        </div>
+        <div className="flex gap-2 justify-end">
+          {step > 0 && (
+            <Button variant="outline" size="sm" onClick={() => setStep(step - 1)}>
+              Back
+            </Button>
+          )}
+          <Button size="sm" onClick={() => isLast ? onClose() : setStep(step + 1)}>
+            {isLast ? "Done" : "Next"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 function MarkdownContent({ content, streaming }) {
   return (
@@ -109,27 +152,29 @@ export default function App() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState("retrieving");
+  const [showTour, setShowTour] = useState(false);
   const bottomRef = useRef(null);
 
-  // Auto-scroll on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
-  // Load conversation list on mount
   useEffect(() => {
     fetchConversations().then(setConversations).catch(console.error);
+    if (!localStorage.getItem("tour_done")) setShowTour(true);
   }, []);
+
+  function handleCloseTour() {
+    localStorage.setItem("tour_done", "1");
+    setShowTour(false);
+  }
 
   async function handleSelectConversation(id) {
     setActiveId(id);
     const convo = await fetchConversation(id);
     const loaded = convo.messages.map((m, i) => ({
-      id: i,
-      role: m.role,
-      content: m.content,
-      sources: m.sources || [],
-      streaming: false,
+      id: i, role: m.role, content: m.content,
+      sources: m.sources || [], streaming: false,
     }));
     setMessages(loaded);
   }
@@ -166,34 +211,24 @@ export default function App() {
     await streamChatQuery(query, convId, {
       onSources: (sources) => {
         setLoadingStage("generating");
-        setMessages((prev) =>
-          prev.map((m) => m.id === assistantId ? { ...m, sources } : m)
-        );
+        setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, sources } : m));
       },
       onToken: (token) => {
         setIsLoading(false);
-        setMessages((prev) =>
-          prev.map((m) => m.id === assistantId ? { ...m, content: m.content + token } : m)
-        );
+        setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: m.content + token } : m));
       },
       onTitle: (title, cid) => {
-        setConversations((prev) =>
-          prev.map((c) => c.id === cid ? { ...c, title } : c)
-        );
+        setConversations((prev) => prev.map((c) => c.id === cid ? { ...c, title } : c));
       },
       onDone: () => {
         setIsLoading(false);
-        setMessages((prev) =>
-          prev.map((m) => m.id === assistantId ? { ...m, streaming: false } : m)
-        );
+        setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, streaming: false } : m));
       },
       onError: (err) => {
         setIsLoading(false);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, content: `Error: ${err}`, streaming: false } : m
-          )
-        );
+        setMessages((prev) => prev.map((m) =>
+          m.id === assistantId ? { ...m, content: `Error: ${err}`, streaming: false } : m
+        ));
       },
     });
   }
@@ -207,6 +242,8 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-background text-foreground">
+      {showTour && <Tour onClose={handleCloseTour} />}
+
       <Sidebar
         conversations={conversations}
         activeId={activeId}
@@ -217,6 +254,9 @@ export default function App() {
       <div className="flex flex-col flex-1 min-w-0">
         <header className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h1 className="text-lg font-semibold tracking-tight">RAG Chat</h1>
+          <Button variant="outline" size="sm" onClick={() => setShowTour(true)}>
+            ? Tour
+          </Button>
         </header>
 
         <main className="flex-1 overflow-y-auto px-6 py-6">
@@ -226,9 +266,7 @@ export default function App() {
                 Ask anything about your documents to get started.
               </p>
             )}
-            {messages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} />
-            ))}
+            {messages.map((msg) => <MessageBubble key={msg.id} message={msg} />)}
             {waitingForFirstToken && <ThinkingIndicator stage={loadingStage} />}
             <div ref={bottomRef} />
           </div>
