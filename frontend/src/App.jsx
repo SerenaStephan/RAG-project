@@ -1,9 +1,14 @@
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/ui/button";
-import { streamChatQuery } from "@/lib/ragApi";
+import {
+  streamChatQuery,
+  createConversation,
+  fetchConversations,
+  fetchConversation,
+} from "@/lib/ragApi";
 
-// ── Markdown renderer ────────────────────────────────────────────────────────
+// ── Markdown renderer ─────────────────────────────────────────────────────────
 function MarkdownContent({ content, streaming }) {
   return (
     <div className="prose prose-sm max-w-none dark:prose-invert
@@ -19,60 +24,45 @@ function MarkdownContent({ content, streaming }) {
   );
 }
 
-// ── Loading state component ──────────────────────────────────────────────────
+// ── Loading indicator ─────────────────────────────────────────────────────────
 function ThinkingIndicator({ stage }) {
   const stages = {
     retrieving: { label: "Searching documents…", width: "w-1/3" },
-    reranking:  { label: "Ranking results…",     width: "w-2/3" },
-    generating: { label: "Generating answer…",   width: "w-full" },
+    generating: { label: "Generating answer…",   width: "w-2/3" },
   };
-
   const current = stages[stage] || stages.retrieving;
-
   return (
     <div className="flex items-start">
       <div className="bg-muted rounded-2xl rounded-tl-sm px-4 py-3 w-56 flex flex-col gap-2">
         <span className="text-xs text-muted-foreground">{current.label}</span>
         <div className="h-1 w-full bg-muted-foreground/20 rounded-full overflow-hidden">
-          <div
-            className={`h-full bg-primary rounded-full transition-all duration-700 ${current.width}`}
-          />
+          <div className={`h-full bg-primary rounded-full transition-all duration-700 ${current.width}`} />
         </div>
       </div>
     </div>
   );
 }
 
-// ── Message bubble ───────────────────────────────────────────────────────────
+// ── Message bubble ────────────────────────────────────────────────────────────
 function MessageBubble({ message }) {
   const isUser = message.role === "user";
-
   return (
     <div className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
-      <div
-        className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-          isUser
-            ? "bg-primary text-primary-foreground rounded-tr-sm"
-            : "bg-muted text-foreground rounded-tl-sm"
-        }`}
-      >
-        {isUser ? (
-          message.content
-        ) : (
+      <div className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+        isUser
+          ? "bg-primary text-primary-foreground rounded-tr-sm"
+          : "bg-muted text-foreground rounded-tl-sm"
+      }`}>
+        {isUser ? message.content : (
           <MarkdownContent content={message.content} streaming={message.streaming} />
         )}
       </div>
-
-      {/* Source chips */}
       {!isUser && message.sources?.length > 0 && (
         <div className="flex flex-wrap gap-1 max-w-[75%] px-1">
-          {message.sources.map((source, i) => (
-            <span
-              key={i}
-              title={source.text}
-              className="text-xs bg-secondary text-secondary-foreground px-2 py-0.5 rounded-full"
-            >
-              p.{source.page} · {source.type}
+          {message.sources.map((s, i) => (
+            <span key={i} title={s.text}
+              className="text-xs bg-secondary text-secondary-foreground px-2 py-0.5 rounded-full">
+              p.{s.page} · {s.type}
             </span>
           ))}
         </div>
@@ -81,36 +71,74 @@ function MessageBubble({ message }) {
   );
 }
 
-// ── Main App ─────────────────────────────────────────────────────────────────
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+function Sidebar({ conversations, activeId, onSelect, onNewChat }) {
+  return (
+    <aside className="w-64 shrink-0 border-r border-border flex flex-col bg-muted/30">
+      <div className="p-4 border-b border-border">
+        <Button className="w-full" onClick={onNewChat}>
+          + New Chat
+        </Button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
+        {conversations.length === 0 && (
+          <p className="text-xs text-muted-foreground text-center mt-4">No conversations yet</p>
+        )}
+        {conversations.map((c) => (
+          <button
+            key={c.id}
+            onClick={() => onSelect(c.id)}
+            className={`w-full text-left px-3 py-2 rounded-lg text-sm truncate transition-colors
+              ${activeId === c.id
+                ? "bg-primary text-primary-foreground"
+                : "hover:bg-muted text-foreground"}`}
+          >
+            {c.title}
+          </button>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
-  const [messages, setMessages] = useState([
-    {
-      id: 1,
-      role: "assistant",
-      content: "Hello! Ask me anything about your documents.",
-      sources: [],
-      streaming: false,
-    },
-  ]);
+  const [conversations, setConversations] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState("retrieving");
   const bottomRef = useRef(null);
 
+  // Auto-scroll on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
-  function handleNewChat() {
-    setMessages([
-      {
-        id: Date.now(),
-        role: "assistant",
-        content: "Hello! Ask me anything about your documents.",
-        sources: [],
-        streaming: false,
-      },
-    ]);
+  // Load conversation list on mount
+  useEffect(() => {
+    fetchConversations().then(setConversations).catch(console.error);
+  }, []);
+
+  async function handleSelectConversation(id) {
+    setActiveId(id);
+    const convo = await fetchConversation(id);
+    const loaded = convo.messages.map((m, i) => ({
+      id: i,
+      role: m.role,
+      content: m.content,
+      sources: m.sources || [],
+      streaming: false,
+    }));
+    setMessages(loaded);
+  }
+
+  async function handleNewChat() {
+    const convo = await createConversation("New Conversation");
+    setConversations((prev) => [convo, ...prev]);
+    setActiveId(convo.id);
+    setMessages([]);
     setInput("");
   }
 
@@ -118,62 +146,52 @@ export default function App() {
     const query = input.trim();
     if (!query || isLoading) return;
 
-    const userMsg = {
-      id: Date.now(),
-      role: "user",
-      content: query,
-      sources: [],
-      streaming: false,
-    };
+    let convId = activeId;
+    if (!convId) {
+      const convo = await createConversation("New Conversation");
+      setConversations((prev) => [convo, ...prev]);
+      setActiveId(convo.id);
+      convId = convo.id;
+    }
+
+    const userMsg = { id: Date.now(), role: "user", content: query, sources: [], streaming: false };
     const assistantId = Date.now() + 1;
-    const assistantMsg = {
-      id: assistantId,
-      role: "assistant",
-      content: "",
-      sources: [],
-      streaming: true,
-    };
+    const assistantMsg = { id: assistantId, role: "assistant", content: "", sources: [], streaming: true };
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setInput("");
     setIsLoading(true);
-    setLoadingStage("retrieving"); // pipeline starts with retrieval
+    setLoadingStage("retrieving");
 
-    await streamChatQuery(query, {
+    await streamChatQuery(query, convId, {
       onSources: (sources) => {
-        // Sources arrive after reranking — move to generating stage
         setLoadingStage("generating");
         setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, sources } : m))
+          prev.map((m) => m.id === assistantId ? { ...m, sources } : m)
         );
       },
-
       onToken: (token) => {
-        // First token means generation started — hide the indicator
         setIsLoading(false);
         setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, content: m.content + token } : m
-          )
+          prev.map((m) => m.id === assistantId ? { ...m, content: m.content + token } : m)
         );
       },
-
+      onTitle: (title, cid) => {
+        setConversations((prev) =>
+          prev.map((c) => c.id === cid ? { ...c, title } : c)
+        );
+      },
       onDone: () => {
         setIsLoading(false);
         setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, streaming: false } : m
-          )
+          prev.map((m) => m.id === assistantId ? { ...m, streaming: false } : m)
         );
       },
-
       onError: (err) => {
         setIsLoading(false);
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId
-              ? { ...m, content: `Error: ${err}`, streaming: false }
-              : m
+            m.id === assistantId ? { ...m, content: `Error: ${err}`, streaming: false } : m
           )
         );
       },
@@ -181,63 +199,60 @@ export default function App() {
   }
 
   function handleKeyDown(e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   }
 
-  const lastMsg = messages.at(-1);
   const waitingForFirstToken =
-    isLoading && lastMsg?.role === "assistant" && lastMsg?.content === "";
+    isLoading && messages.at(-1)?.role === "assistant" && messages.at(-1)?.content === "";
 
   return (
-    <div className="flex flex-col h-screen bg-background text-foreground">
-      {/* Header */}
-      <header className="flex items-center justify-between px-6 py-4 border-b border-border">
-        <h1 className="text-lg font-semibold tracking-tight">RAG Chat</h1>
-        <Button variant="outline" size="sm" onClick={handleNewChat}>
-          New Chat
-        </Button>
-      </header>
+    <div className="flex h-screen bg-background text-foreground">
+      <Sidebar
+        conversations={conversations}
+        activeId={activeId}
+        onSelect={handleSelectConversation}
+        onNewChat={handleNewChat}
+      />
 
-      {/* Messages */}
-      <main className="flex-1 overflow-y-auto px-6 py-6">
-        <div className="max-w-2xl mx-auto flex flex-col gap-4">
-          {messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
-          ))}
+      <div className="flex flex-col flex-1 min-w-0">
+        <header className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <h1 className="text-lg font-semibold tracking-tight">RAG Chat</h1>
+        </header>
 
-          {/* Loading indicator — shows pipeline stage */}
-          {waitingForFirstToken && <ThinkingIndicator stage={loadingStage} />}
+        <main className="flex-1 overflow-y-auto px-6 py-6">
+          <div className="max-w-2xl mx-auto flex flex-col gap-4">
+            {messages.length === 0 && !isLoading && (
+              <p className="text-center text-muted-foreground text-sm mt-20">
+                Ask anything about your documents to get started.
+              </p>
+            )}
+            {messages.map((msg) => (
+              <MessageBubble key={msg.id} message={msg} />
+            ))}
+            {waitingForFirstToken && <ThinkingIndicator stage={loadingStage} />}
+            <div ref={bottomRef} />
+          </div>
+        </main>
 
-          <div ref={bottomRef} />
-        </div>
-      </main>
-
-      {/* Input */}
-      <footer className="border-t border-border px-6 py-4">
-        <div className="max-w-2xl mx-auto flex gap-3 items-end">
-          <textarea
-            className="flex-1 resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm
-                       placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring
-                       min-h-[48px] max-h-[160px]"
-            placeholder="Ask a question…"
-            rows={1}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isLoading}
-          />
-          <Button
-            onClick={handleSend}
-            disabled={!input.trim() || isLoading}
-            className="h-12 px-5"
-          >
-            {isLoading ? "..." : "Send"}
-          </Button>
-        </div>
-      </footer>
+        <footer className="border-t border-border px-6 py-4">
+          <div className="max-w-2xl mx-auto flex gap-3 items-end">
+            <textarea
+              className="flex-1 resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm
+                         placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring
+                         min-h-[48px] max-h-[160px]"
+              placeholder="Ask a question…"
+              rows={1}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={isLoading}
+            />
+            <Button onClick={handleSend} disabled={!input.trim() || isLoading} className="h-12 px-5">
+              {isLoading ? "..." : "Send"}
+            </Button>
+          </div>
+        </footer>
+      </div>
     </div>
   );
 }
