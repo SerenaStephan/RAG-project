@@ -13,35 +13,26 @@ const TOUR_STEPS = [
   { title: "Conversation History", body: "All your past chats are saved here automatically. Click any conversation to resume it." },
   { title: "New Chat", body: "Click '+ New Chat' to start a fresh conversation at any time." },
   { title: "Ask a Question", body: "Type your question and press Enter to send. Use Shift+Enter for a new line." },
-  { title: "Streaming Answers", body: "Answers stream in word by word. Source page references appear below each response." },
+  { title: "Streaming Answers", body: "Answers stream in word by word. Inline [1] [2] citations link to source snippets below." },
 ];
 
 function Tour({ onClose }) {
   const [step, setStep] = useState(0);
   const current = TOUR_STEPS[step];
   const isLast = step === TOUR_STEPS.length - 1;
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-background border border-border rounded-2xl shadow-xl p-6 w-80 flex flex-col gap-4">
         <div className="flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">
-            {step + 1} / {TOUR_STEPS.length}
-          </span>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-sm">
-            Skip
-          </button>
+          <span className="text-xs text-muted-foreground">{step + 1} / {TOUR_STEPS.length}</span>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-sm">Skip</button>
         </div>
         <div>
           <h3 className="font-semibold text-base mb-1">{current.title}</h3>
           <p className="text-sm text-muted-foreground">{current.body}</p>
         </div>
         <div className="flex gap-2 justify-end">
-          {step > 0 && (
-            <Button variant="outline" size="sm" onClick={() => setStep(step - 1)}>
-              Back
-            </Button>
-          )}
+          {step > 0 && <Button variant="outline" size="sm" onClick={() => setStep(step - 1)}>Back</Button>}
           <Button size="sm" onClick={() => isLast ? onClose() : setStep(step + 1)}>
             {isLast ? "Done" : "Next"}
           </Button>
@@ -51,15 +42,88 @@ function Tour({ onClose }) {
   );
 }
 
-// ── Markdown renderer ─────────────────────────────────────────────────────────
-function MarkdownContent({ content, streaming }) {
+// ── Citation tooltip ──────────────────────────────────────────────────────────
+function CitationBadge({ num, sources }) {
+  const [visible, setVisible] = useState(false);
+  const source = sources?.[num - 1];
+  if (!source) return <span className="text-xs text-muted-foreground">[{num}]</span>;
+
+  return (
+    <span className="relative inline-block">
+      <button
+        className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10
+                   text-primary text-[10px] font-bold mx-0.5 hover:bg-primary/20 transition-colors"
+        onMouseEnter={() => setVisible(true)}
+        onMouseLeave={() => setVisible(false)}
+        onClick={() => setVisible(!visible)}
+      >
+        {num}
+      </button>
+      {visible && (
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50
+                        w-72 bg-popover border border-border rounded-xl shadow-lg p-3 text-xs">
+          <div className="font-semibold text-foreground mb-1">
+            p.{source.page} · {source.type}
+          </div>
+          <p className="text-muted-foreground line-clamp-4">{source.text}</p>
+          <div className="text-[10px] text-muted-foreground/60 mt-1">
+            Score: {source.rerank_score}
+          </div>
+        </div>
+      )}
+    </span>
+  );
+}
+
+// ── Collapsible sources panel ─────────────────────────────────────────────────
+function SourcesPanel({ sources }) {
+  const [open, setOpen] = useState(false);
+  if (!sources?.length) return null;
+
+  return (
+    <div className="mt-2 max-w-[75%]">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <span>{open ? "▾" : "▸"}</span>
+        <span>{sources.length} source{sources.length > 1 ? "s" : ""}</span>
+      </button>
+      {open && (
+        <div className="mt-2 flex flex-col gap-2">
+          {sources.map((s, i) => (
+            <div key={i} className="bg-muted/50 rounded-xl p-3 text-xs border border-border">
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-semibold text-foreground">
+                  [{i + 1}] p.{s.page} · {s.type}
+                </span>
+                <span className="text-muted-foreground/60">score: {s.rerank_score}</span>
+              </div>
+              <p className="text-muted-foreground leading-relaxed">{s.text}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Markdown with inline citations ────────────────────────────────────────────
+function CitedMarkdown({ content, streaming, sources }) {
+  // Split the whole content on citation markers first
+  const segments = content.split(/(\[\d+\])/g);
+
   return (
     <div className="prose prose-sm max-w-none dark:prose-invert
                     prose-p:my-1 prose-ul:my-1 prose-ol:my-1
-                    prose-li:my-0 prose-headings:my-2
-                    prose-code:bg-muted prose-code:px-1 prose-code:rounded
-                    prose-pre:bg-muted prose-pre:p-3 prose-pre:rounded-lg">
-      <ReactMarkdown>{content}</ReactMarkdown>
+                    prose-li:my-0 prose-headings:my-2">
+      {segments.map((seg, i) => {
+        const match = seg.match(/^\[(\d+)\]$/);
+        if (match) {
+          return <CitationBadge key={i} num={parseInt(match[1])} sources={sources} />;
+        }
+        return seg ? <ReactMarkdown key={i}>{seg}</ReactMarkdown> : null;
+      })}
       {streaming && (
         <span className="inline-block w-[2px] h-[14px] bg-foreground ml-0.5 animate-pulse align-middle" />
       )}
@@ -97,19 +161,14 @@ function MessageBubble({ message }) {
           : "bg-muted text-foreground rounded-tl-sm"
       }`}>
         {isUser ? message.content : (
-          <MarkdownContent content={message.content} streaming={message.streaming} />
+          <CitedMarkdown
+            content={message.content}
+            streaming={message.streaming}
+            sources={message.sources}
+          />
         )}
       </div>
-      {!isUser && message.sources?.length > 0 && (
-        <div className="flex flex-wrap gap-1 max-w-[75%] px-1">
-          {message.sources.map((s, i) => (
-            <span key={i} title={s.text}
-              className="text-xs bg-secondary text-secondary-foreground px-2 py-0.5 rounded-full">
-              p.{s.page} · {s.type}
-            </span>
-          ))}
-        </div>
-      )}
+      {!isUser && <SourcesPanel sources={message.sources} />}
     </div>
   );
 }
@@ -119,23 +178,16 @@ function Sidebar({ conversations, activeId, onSelect, onNewChat }) {
   return (
     <aside className="w-64 shrink-0 border-r border-border flex flex-col bg-muted/30">
       <div className="p-4 border-b border-border">
-        <Button className="w-full" onClick={onNewChat}>
-          + New Chat
-        </Button>
+        <Button className="w-full" onClick={onNewChat}>+ New Chat</Button>
       </div>
       <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
         {conversations.length === 0 && (
           <p className="text-xs text-muted-foreground text-center mt-4">No conversations yet</p>
         )}
         {conversations.map((c) => (
-          <button
-            key={c.id}
-            onClick={() => onSelect(c.id)}
+          <button key={c.id} onClick={() => onSelect(c.id)}
             className={`w-full text-left px-3 py-2 rounded-lg text-sm truncate transition-colors
-              ${activeId === c.id
-                ? "bg-primary text-primary-foreground"
-                : "hover:bg-muted text-foreground"}`}
-          >
+              ${activeId === c.id ? "bg-primary text-primary-foreground" : "hover:bg-muted text-foreground"}`}>
             {c.title}
           </button>
         ))}
@@ -161,22 +213,16 @@ export default function App() {
 
   useEffect(() => {
     fetchConversations().then(setConversations).catch(console.error);
-    if (!localStorage.getItem("tour_done")) setShowTour(true);
+    setShowTour(true);
   }, []);
-
-  function handleCloseTour() {
-    localStorage.setItem("tour_done", "1");
-    setShowTour(false);
-  }
 
   async function handleSelectConversation(id) {
     setActiveId(id);
     const convo = await fetchConversation(id);
-    const loaded = convo.messages.map((m, i) => ({
+    setMessages(convo.messages.map((m, i) => ({
       id: i, role: m.role, content: m.content,
       sources: m.sources || [], streaming: false,
-    }));
-    setMessages(loaded);
+    })));
   }
 
   async function handleNewChat() {
@@ -242,7 +288,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-background text-foreground">
-      {showTour && <Tour onClose={handleCloseTour} />}
+      {showTour && <Tour onClose={() => setShowTour(false)} />}
 
       <Sidebar
         conversations={conversations}
@@ -254,9 +300,7 @@ export default function App() {
       <div className="flex flex-col flex-1 min-w-0">
         <header className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h1 className="text-lg font-semibold tracking-tight">RAG Chat</h1>
-          <Button variant="outline" size="sm" onClick={() => setShowTour(true)}>
-            ? Tour
-          </Button>
+          <Button variant="outline" size="sm" onClick={() => setShowTour(true)}>? Tour</Button>
         </header>
 
         <main className="flex-1 overflow-y-auto px-6 py-6">
