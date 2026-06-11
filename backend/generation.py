@@ -37,7 +37,7 @@ Answer in markdown with inline citations:
 
 def generate_answer_with_ollama(query, reranked_chunks):
     """Non-streaming generation — kept for testing.py compatibility."""
-    llm = ChatOllama(model="llama3.2:3b", temperature=0)
+    llm = ChatOllama(model="llama3.2:3b", temperature=0.7)
     prompt = build_prompt(query, reranked_chunks)
     response = llm.invoke(prompt)
     answer = response.content.strip()

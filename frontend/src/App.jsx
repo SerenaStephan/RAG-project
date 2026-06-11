@@ -6,14 +6,16 @@ import {
   createConversation,
   fetchConversations,
   fetchConversation,
+  regenerateMessage,
+  setMessageVersion,
 } from "@/lib/ragApi";
 
 // ── Custom Tour ───────────────────────────────────────────────────────────────
 const TOUR_STEPS = [
-  { title: "Conversation History", body: "All your past chats are saved here automatically. Click any conversation to resume it." },
-  { title: "New Chat", body: "Click '+ New Chat' to start a fresh conversation at any time." },
-  { title: "Ask a Question", body: "Type your question and press Enter to send. Use Shift+Enter for a new line." },
-  { title: "Streaming Answers", body: "Answers stream in word by word. Inline [1] [2] citations link to source snippets below." },
+  { title: "Conversation History", body: "All your past chats are saved here automatically." },
+  { title: "New Chat", body: "Click '+ New Chat' to start a fresh conversation." },
+  { title: "Ask a Question", body: "Type your question and press Enter to send." },
+  { title: "Regenerate", body: "Click ↻ on any response to regenerate it. Use ‹ › to switch between versions." },
 ];
 
 function Tour({ onClose }) {
@@ -42,7 +44,7 @@ function Tour({ onClose }) {
   );
 }
 
-// ── Citation tooltip ──────────────────────────────────────────────────────────
+// ── Citation badge ────────────────────────────────────────────────────────────
 function CitationBadge({ num, sources }) {
   const [visible, setVisible] = useState(false);
   const source = sources?.[num - 1];
@@ -62,13 +64,9 @@ function CitationBadge({ num, sources }) {
       {visible && (
         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50
                         w-72 bg-popover border border-border rounded-xl shadow-lg p-3 text-xs">
-          <div className="font-semibold text-foreground mb-1">
-            p.{source.page} · {source.type}
-          </div>
+          <div className="font-semibold text-foreground mb-1">p.{source.page} · {source.type}</div>
           <p className="text-muted-foreground line-clamp-4">{source.text}</p>
-          <div className="text-[10px] text-muted-foreground/60 mt-1">
-            Score: {source.rerank_score}
-          </div>
+          <div className="text-[10px] text-muted-foreground/60 mt-1">Score: {source.rerank_score}</div>
         </div>
       )}
     </span>
@@ -79,7 +77,6 @@ function CitationBadge({ num, sources }) {
 function SourcesPanel({ sources }) {
   const [open, setOpen] = useState(false);
   if (!sources?.length) return null;
-
   return (
     <div className="mt-2 max-w-[75%]">
       <button
@@ -94,9 +91,7 @@ function SourcesPanel({ sources }) {
           {sources.map((s, i) => (
             <div key={i} className="bg-muted/50 rounded-xl p-3 text-xs border border-border">
               <div className="flex items-center justify-between mb-1">
-                <span className="font-semibold text-foreground">
-                  [{i + 1}] p.{s.page} · {s.type}
-                </span>
+                <span className="font-semibold text-foreground">[{i + 1}] p.{s.page} · {s.type}</span>
                 <span className="text-muted-foreground/60">score: {s.rerank_score}</span>
               </div>
               <p className="text-muted-foreground leading-relaxed">{s.text}</p>
@@ -108,20 +103,17 @@ function SourcesPanel({ sources }) {
   );
 }
 
-// ── Markdown with inline citations ────────────────────────────────────────────
+// ── Cited markdown ────────────────────────────────────────────────────────────
 function CitedMarkdown({ content, streaming, sources }) {
-  // Split the whole content on citation markers first
   const segments = content.split(/(\[\d+\])/g);
-
   return (
     <div className="prose prose-sm max-w-none dark:prose-invert
                     prose-p:my-1 prose-ul:my-1 prose-ol:my-1
-                    prose-li:my-0 prose-headings:my-2">
+                    prose-li:my-0 prose-headings:my-2
+                    prose-code:bg-muted prose-code:px-1 prose-code:rounded">
       {segments.map((seg, i) => {
         const match = seg.match(/^\[(\d+)\]$/);
-        if (match) {
-          return <CitationBadge key={i} num={parseInt(match[1])} sources={sources} />;
-        }
+        if (match) return <CitationBadge key={i} num={parseInt(match[1])} sources={sources} />;
         return seg ? <ReactMarkdown key={i}>{seg}</ReactMarkdown> : null;
       })}
       {streaming && (
@@ -151,8 +143,12 @@ function ThinkingIndicator({ stage }) {
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────────
-function MessageBubble({ message }) {
+function MessageBubble({ message, onRegenerate }) {
   const isUser = message.role === "user";
+  const versions = message.versions || [{ content: message.content, sources: message.sources }];
+  const currentIdx = message.currentVersion ?? 0;
+  const current = versions[currentIdx];
+
   return (
     <div className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
       <div className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
@@ -162,13 +158,43 @@ function MessageBubble({ message }) {
       }`}>
         {isUser ? message.content : (
           <CitedMarkdown
-            content={message.content}
+            content={current.content}
             streaming={message.streaming}
-            sources={message.sources}
+            sources={current.sources}
           />
         )}
       </div>
-      {!isUser && <SourcesPanel sources={message.sources} />}
+
+      {/* Assistant controls */}
+      {!isUser && !message.streaming && (
+        <div className="flex items-center gap-2 px-1">
+          {/* Version switcher */}
+          {versions.length > 1 && (
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              <button
+                disabled={currentIdx === 0}
+                onClick={() => onRegenerate("prev", currentIdx - 1)}
+                className="hover:text-foreground disabled:opacity-30"
+              >‹</button>
+              <span>{currentIdx + 1} / {versions.length}</span>
+              <button
+                disabled={currentIdx === versions.length - 1}
+                onClick={() => onRegenerate("next", currentIdx + 1)}
+                className="hover:text-foreground disabled:opacity-30"
+              >›</button>
+            </div>
+          )}
+          {/* Regenerate button */}
+          <button
+            onClick={() => onRegenerate("regenerate")}
+            className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+          >
+            ↻ Regenerate
+          </button>
+        </div>
+      )}
+
+      {!isUser && <SourcesPanel sources={current.sources} />}
     </div>
   );
 }
@@ -219,10 +245,19 @@ export default function App() {
   async function handleSelectConversation(id) {
     setActiveId(id);
     const convo = await fetchConversation(id);
-    setMessages(convo.messages.map((m, i) => ({
-      id: i, role: m.role, content: m.content,
-      sources: m.sources || [], streaming: false,
-    })));
+    setMessages(convo.messages.map((m, i) => {
+      if (m.role === "assistant") {
+        return {
+          id: i,
+          role: "assistant",
+          versions: m.versions || [{ content: m.content || "", sources: m.sources || [] }],
+          currentVersion: m.current_version ?? 0,
+          streaming: false,
+          messageIndex: i,
+        };
+      }
+      return { id: i, role: "user", content: m.content, sources: [], streaming: false, messageIndex: i };
+    }));
   }
 
   async function handleNewChat() {
@@ -247,7 +282,13 @@ export default function App() {
 
     const userMsg = { id: Date.now(), role: "user", content: query, sources: [], streaming: false };
     const assistantId = Date.now() + 1;
-    const assistantMsg = { id: assistantId, role: "assistant", content: "", sources: [], streaming: true };
+    const assistantMsg = {
+      id: assistantId, role: "assistant",
+      versions: [{ content: "", sources: [] }],
+      currentVersion: 0,
+      streaming: true,
+      messageIndex: null,
+    };
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setInput("");
@@ -257,24 +298,108 @@ export default function App() {
     await streamChatQuery(query, convId, {
       onSources: (sources) => {
         setLoadingStage("generating");
-        setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, sources } : m));
+        setMessages((prev) => prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, versions: [{ content: m.versions[0].content, sources }] }
+            : m
+        ));
       },
       onToken: (token) => {
         setIsLoading(false);
-        setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: m.content + token } : m));
+        setMessages((prev) => prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, versions: [{ ...m.versions[0], content: m.versions[0].content + token }] }
+            : m
+        ));
       },
       onTitle: (title, cid) => {
         setConversations((prev) => prev.map((c) => c.id === cid ? { ...c, title } : c));
       },
-      onDone: () => {
+      onDone: (msgIndex) => {
         setIsLoading(false);
-        setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, streaming: false } : m));
+        setMessages((prev) => prev.map((m) =>
+          m.id === assistantId ? { ...m, streaming: false, messageIndex: msgIndex } : m
+        ));
       },
       onError: (err) => {
         setIsLoading(false);
         setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, content: `Error: ${err}`, streaming: false } : m
+          m.id === assistantId
+            ? { ...m, versions: [{ content: `Error: ${err}`, sources: [] }], streaming: false }
+            : m
         ));
+      },
+    });
+  }
+
+  async function handleRegenerate(messageId, action, versionIdx) {
+    if (action === "prev" || action === "next") {
+      // Switch version locally and persist to DB
+      setMessages((prev) => prev.map((m) => {
+        if (m.id !== messageId) return m;
+        if (m.messageIndex != null && activeId) {
+          setMessageVersion(activeId, m.messageIndex, versionIdx);
+        }
+        return { ...m, currentVersion: versionIdx };
+      }));
+      return;
+    }
+
+    // Find the message and its preceding user message
+    const msgIdx = messages.findIndex((m) => m.id === messageId);
+    if (msgIdx < 1) return;
+    const userMsg = messages[msgIdx - 1];
+    const assistantMsg = messages[msgIdx];
+    if (!userMsg || userMsg.role !== "user") return;
+
+    const query = userMsg.content;
+    const convId = activeId;
+    const dbMsgIndex = assistantMsg.messageIndex;
+
+    // Start streaming new version
+    setMessages((prev) => prev.map((m) =>
+      m.id === messageId
+        ? { ...m, streaming: true, versions: [...m.versions, { content: "", sources: [] }], currentVersion: m.versions.length }
+        : m
+    ));
+    setIsLoading(true);
+    setLoadingStage("retrieving");
+
+    const newVersionIdx = assistantMsg.versions.length; // index of new version
+
+    await regenerateMessage(query, convId, dbMsgIndex, {
+      onSources: (sources) => {
+        setLoadingStage("generating");
+        setMessages((prev) => prev.map((m) => {
+          if (m.id !== messageId) return m;
+          const versions = [...m.versions];
+          versions[newVersionIdx] = { ...versions[newVersionIdx], sources };
+          return { ...m, versions };
+        }));
+      },
+      onToken: (token) => {
+        setIsLoading(false);
+        setMessages((prev) => prev.map((m) => {
+          if (m.id !== messageId) return m;
+          const versions = [...m.versions];
+          versions[newVersionIdx] = { ...versions[newVersionIdx], content: versions[newVersionIdx].content + token };
+          return { ...m, versions };
+        }));
+      },
+      onDone: () => {
+        setIsLoading(false);
+        setMessages((prev) => prev.map((m) =>
+          m.id === messageId ? { ...m, streaming: false } : m
+        ));
+      },
+      onError: (err) => {
+        setIsLoading(false);
+        setMessages((prev) => prev.map((m) => {
+          if (m.id !== messageId) return m;
+          const versions = [...m.versions];
+          versions[newVersionIdx] = { content: `Error: ${err}`, sources: [] };
+          return { ...m, versions, streaming: false };
+        }));
       },
     });
   }
@@ -284,7 +409,7 @@ export default function App() {
   }
 
   const waitingForFirstToken =
-    isLoading && messages.at(-1)?.role === "assistant" && messages.at(-1)?.content === "";
+    isLoading && messages.at(-1)?.role === "assistant" && messages.at(-1)?.versions?.[0]?.content === "";
 
   return (
     <div className="flex h-screen bg-background text-foreground">
@@ -310,7 +435,13 @@ export default function App() {
                 Ask anything about your documents to get started.
               </p>
             )}
-            {messages.map((msg) => <MessageBubble key={msg.id} message={msg} />)}
+            {messages.map((msg) => (
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                onRegenerate={(action, versionIdx) => handleRegenerate(msg.id, action, versionIdx)}
+              />
+            ))}
             {waitingForFirstToken && <ThinkingIndicator stage={loadingStage} />}
             <div ref={bottomRef} />
           </div>
