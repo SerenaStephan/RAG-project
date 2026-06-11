@@ -14,12 +14,104 @@ import {
 const FEEDBACK_REASONS = ["Wrong answer","Too vague","Hallucination","Missing sources","Off topic","Other"];
 
 const TOUR_STEPS = [
-  { title: "Conversation History", body: "All your past chats are saved here. Tap the menu icon to open the sidebar on mobile." },
+  { title: "Conversation History", body: "All your past chats are saved here. Tap the menu icon on mobile." },
   { title: "New Chat", body: "Click '+ New Chat' to start a fresh conversation." },
   { title: "Ask a Question", body: "Type your question and press Enter to send." },
   { title: "Regenerate & Compare", body: "Click ↻ to regenerate or ⇔ Compare to view two versions side by side." },
-  { title: "Export, Read & Copy", body: "Export as Markdown/PDF, click 🔊 to read aloud, or 📋 to copy the response." },
+  { title: "Generate Slides", body: "Click 🎯 Slides in the header, type a topic, and download a PowerPoint presentation built from your documents." },
 ];
+
+// ── Generate Slides modal ─────────────────────────────────────────────────────
+function SlidesModal({ onClose }) {
+  const [topic, setTopic] = useState("");
+  const [status, setStatus] = useState("idle"); // idle | generating | done | error
+  const [errorMsg, setErrorMsg] = useState("");
+
+  async function handleGenerate() {
+    if (!topic.trim()) return;
+    setStatus("generating");
+    setErrorMsg("");
+
+    try {
+      const res = await fetch("http://localhost:8000/presentation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: topic.trim() }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Server error: ${res.status}`);
+      }
+
+      // Trigger download
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename=(.+)/);
+      a.download = match ? match[1] : "presentation.pptx";
+      a.click();
+      URL.revokeObjectURL(url);
+      setStatus("done");
+    } catch (err) {
+      setErrorMsg(err.message);
+      setStatus("error");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="bg-background border border-border rounded-2xl shadow-xl p-6 w-full max-w-md flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-base">🎯 Generate Slides</h2>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-sm">✕</button>
+        </div>
+
+        <p className="text-sm text-muted-foreground">
+          Enter a topic and we'll retrieve relevant content from your documents and build a PowerPoint presentation.
+        </p>
+
+        <input
+          autoFocus
+          className="border border-input rounded-xl px-4 py-3 text-sm bg-background
+                     focus:outline-none focus:ring-2 focus:ring-ring"
+          placeholder="e.g. CIS Controls safeguards overview"
+          value={topic}
+          onChange={(e) => setTopic(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleGenerate()}
+          disabled={status === "generating"}
+        />
+
+        {status === "generating" && (
+          <div className="flex flex-col gap-2">
+            <p className="text-xs text-muted-foreground italic">Retrieving content and building slides…</p>
+            <div className="h-1 w-full bg-muted-foreground/20 rounded-full overflow-hidden">
+              <div className="h-full bg-primary rounded-full animate-pulse w-3/4" />
+            </div>
+          </div>
+        )}
+
+        {status === "done" && (
+          <p className="text-sm text-green-600">✓ Slides downloaded successfully!</p>
+        )}
+
+        {status === "error" && (
+          <p className="text-sm text-red-500">Error: {errorMsg}</p>
+        )}
+
+        <div className="flex gap-2 justify-end">
+          <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+          <Button size="sm" onClick={handleGenerate}
+            disabled={!topic.trim() || status === "generating"}>
+            {status === "generating" ? "Generating…" : "Generate"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── Export helpers ────────────────────────────────────────────────────────────
 function buildMarkdown(title, messages) {
@@ -188,7 +280,6 @@ function CitedMarkdown({ content, streaming, sources }) {
   );
 }
 
-// ── Compare view ──────────────────────────────────────────────────────────────
 function CompareView({ versionA, versionB, streaming, onKeep, onClose }) {
   return (
     <div className="w-full border border-border rounded-2xl overflow-hidden mt-1">
@@ -203,9 +294,7 @@ function CompareView({ versionA, versionB, streaming, onKeep, onClose }) {
             <button onClick={() => onKeep("A")}
               className="text-xs bg-primary text-primary-foreground px-2 py-1 rounded-lg hover:opacity-90">Keep A</button>
           </div>
-          <div className="text-sm">
-            <CitedMarkdown content={versionA.content} streaming={false} sources={versionA.sources} />
-          </div>
+          <div className="text-sm"><CitedMarkdown content={versionA.content} streaming={false} sources={versionA.sources} /></div>
           <SourcesPanel sources={versionA.sources} />
         </div>
         <div className="p-4 flex flex-col gap-3">
@@ -233,65 +322,41 @@ function CompareView({ versionA, versionB, streaming, onKeep, onClose }) {
   );
 }
 
-// ── Speak button ──────────────────────────────────────────────────────────────
 function SpeakButton({ content }) {
   const [speaking, setSpeaking] = useState(false);
-
   function handleSpeak() {
-    if (speaking) {
-      window.speechSynthesis.cancel();
-      setSpeaking(false);
-      return;
-    }
-    const clean = content
-      .replace(/\[(\d+)\]/g, "")
-      .replace(/\*\*/g, "")
-      .replace(/#{1,6} /g, "")
-      .replace(/- /g, "")
-      .trim();
+    if (speaking) { window.speechSynthesis.cancel(); setSpeaking(false); return; }
+    const clean = content.replace(/\[(\d+)\]/g,"").replace(/\*\*/g,"").replace(/#{1,6} /g,"").replace(/- /g,"").trim();
     const utterance = new SpeechSynthesisUtterance(clean);
     utterance.onend = () => setSpeaking(false);
     utterance.onerror = () => setSpeaking(false);
     window.speechSynthesis.speak(utterance);
     setSpeaking(true);
   }
-
   useEffect(() => { return () => window.speechSynthesis.cancel(); }, []);
-
   return (
-    <button onClick={handleSpeak}
-      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+    <button onClick={handleSpeak} className="text-xs text-muted-foreground hover:text-foreground transition-colors"
       title={speaking ? "Stop reading" : "Read aloud"}>
       {speaking ? "⏹ Stop" : "🔊 Read"}
     </button>
   );
 }
 
-// ── Copy button ───────────────────────────────────────────────────────────────
 function CopyButton({ content }) {
   const [copied, setCopied] = useState(false);
-
   async function handleCopy() {
-    const clean = content
-      .replace(/\[(\d+)\]/g, "")
-      .replace(/\*\*/g, "")
-      .replace(/#{1,6} /g, "")
-      .trim();
+    const clean = content.replace(/\[(\d+)\]/g,"").replace(/\*\*/g,"").replace(/#{1,6} /g,"").trim();
     await navigator.clipboard.writeText(clean);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
-
   return (
-    <button onClick={handleCopy}
-      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-      title="Copy response">
+    <button onClick={handleCopy} className="text-xs text-muted-foreground hover:text-foreground transition-colors" title="Copy response">
       {copied ? "✓ Copied" : "📋 Copy"}
     </button>
   );
 }
 
-// ── Other reason input ────────────────────────────────────────────────────────
 function OtherReasonInput({ onSubmit, onCancel }) {
   const [text, setText] = useState("");
   return (
@@ -369,7 +434,6 @@ function ThinkingIndicator({ stage }) {
   );
 }
 
-// ── Message bubble ────────────────────────────────────────────────────────────
 function MessageBubble({ message, onRegenerate, onCompare, onKeepVersion, activeId }) {
   const isUser = message.role === "user";
   const versions = message.versions || [{ content: message.content, sources: message.sources }];
@@ -379,11 +443,8 @@ function MessageBubble({ message, onRegenerate, onCompare, onKeepVersion, active
   return (
     <div className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"} w-full`}>
       {!message.compareMode && (
-        <div className={`
-          w-full sm:max-w-[85%] md:max-w-[75%]
-          rounded-2xl px-4 py-3 text-sm leading-relaxed
-          ${isUser ? "bg-primary text-primary-foreground rounded-tr-sm" : "bg-muted text-foreground rounded-tl-sm"}
-        `}>
+        <div className={`w-full sm:max-w-[85%] md:max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed
+          ${isUser ? "bg-primary text-primary-foreground rounded-tr-sm" : "bg-muted text-foreground rounded-tl-sm"}`}>
           {isUser ? message.content : (
             <CitedMarkdown content={current.content} streaming={message.streaming} sources={current.sources} />
           )}
@@ -426,17 +487,13 @@ function MessageBubble({ message, onRegenerate, onCompare, onKeepVersion, active
   );
 }
 
-// ── Sidebar ───────────────────────────────────────────────────────────────────
 function Sidebar({ conversations, activeId, onSelect, onNewChat, open, onClose }) {
   return (
     <>
       {open && <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={onClose} />}
-      <aside className={`
-        fixed md:relative z-40 md:z-auto top-0 left-0 h-full
+      <aside className={`fixed md:relative z-40 md:z-auto top-0 left-0 h-full
         w-64 shrink-0 border-r border-border flex flex-col bg-background md:bg-muted/30
-        transition-transform duration-300
-        ${open ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
-      `}>
+        transition-transform duration-300 ${open ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
         <div className="p-4 border-b border-border flex items-center gap-2">
           <Button className="flex-1" onClick={() => { onNewChat(); onClose(); }}>+ New Chat</Button>
           <button onClick={onClose} className="md:hidden text-muted-foreground hover:text-foreground p-1">✕</button>
@@ -468,17 +525,12 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState("retrieving");
   const [showTour, setShowTour] = useState(false);
+  const [showSlides, setShowSlides] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const bottomRef = useRef(null);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading]);
-
-  useEffect(() => {
-    fetchConversations().then(setConversations).catch(console.error);
-    setShowTour(true);
-  }, []);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isLoading]);
+  useEffect(() => { fetchConversations().then(setConversations).catch(console.error); setShowTour(true); }, []);
 
   async function handleSelectConversation(id) {
     setActiveId(id);
@@ -627,6 +679,8 @@ export default function App() {
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden">
       {showTour && <Tour onClose={() => setShowTour(false)} />}
+      {showSlides && <SlidesModal onClose={() => setShowSlides(false)} />}
+
       <Sidebar conversations={conversations} activeId={activeId}
         onSelect={handleSelectConversation} onNewChat={handleNewChat}
         open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
@@ -637,6 +691,7 @@ export default function App() {
             className="md:hidden p-1 text-muted-foreground hover:text-foreground text-lg">☰</button>
           <h1 className="text-lg font-semibold tracking-tight flex-1 md:flex-none">RAG Chat</h1>
           <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setShowSlides(true)}>🎯 Slides</Button>
             <ExportMenu title={activeTitle} messages={messages} />
             <Button variant="outline" size="sm" onClick={() => setShowTour(true)}>? Tour</Button>
           </div>
