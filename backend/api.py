@@ -16,6 +16,7 @@ from database import (
     add_message_version,
     set_current_version,
     update_conversation_title,
+    save_feedback,
 )
 
 
@@ -48,6 +49,14 @@ class SetVersionRequest(BaseModel):
     version_index: int
 
 
+class FeedbackRequest(BaseModel):
+    conversation_id: str
+    message_index: int
+    version_index: int
+    rating: str         # "up" or "down"
+    reason: str | None = None
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -75,6 +84,20 @@ async def get_conversation_route(conversation_id: str):
 async def set_version(conversation_id: str, message_index: int, body: SetVersionRequest):
     await set_current_version(conversation_id, message_index, body.version_index)
     return {"ok": True}
+
+
+@app.post("/feedback")
+async def submit_feedback(body: FeedbackRequest):
+    if body.rating == "down" and not body.reason:
+        raise HTTPException(status_code=400, detail="Reason is required for negative feedback.")
+    result = await save_feedback(
+        body.conversation_id,
+        body.message_index,
+        body.version_index,
+        body.rating,
+        body.reason,
+    )
+    return result
 
 
 @app.post("/chat/stream")
@@ -158,7 +181,6 @@ async def chat_regenerate(request: RegenerateRequest):
     if not retrieved_chunks:
         raise HTTPException(status_code=404, detail="No relevant chunks found.")
 
-    # Use top 5 then randomly sample 3 for variety
     top_chunks = rerank_chunks(query, retrieved_chunks, top_n=5)
     best_chunks = random.sample(top_chunks, min(3, len(top_chunks)))
 

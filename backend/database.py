@@ -7,6 +7,7 @@ MONGO_URL = "mongodb://localhost:27017"
 client = AsyncIOMotorClient(MONGO_URL)
 db = client["rag_db"]
 conversations_col = db["conversations"]
+feedback_col = db["feedback"]
 
 
 def utcnow():
@@ -46,7 +47,6 @@ async def get_conversation(conversation_id: str) -> dict | None:
 
 
 async def append_message(conversation_id: str, role: str, content: str, sources: list) -> None:
-    """Append a new message. Assistant messages store versions array."""
     if role == "assistant":
         message = {
             "role": role,
@@ -71,20 +71,16 @@ async def append_message(conversation_id: str, role: str, content: str, sources:
 
 
 async def add_message_version(conversation_id: str, message_index: int, content: str, sources: list) -> dict:
-    """Add a new version to an existing assistant message."""
     convo = await conversations_col.find_one({"_id": ObjectId(conversation_id)})
     if not convo:
         return {}
-
     messages = convo.get("messages", [])
     if message_index >= len(messages):
         return {}
-
     msg = messages[message_index]
     versions = msg.get("versions", [])
     versions.append({"content": content, "sources": sources})
     new_version_index = len(versions) - 1
-
     await conversations_col.update_one(
         {"_id": ObjectId(conversation_id)},
         {
@@ -99,7 +95,6 @@ async def add_message_version(conversation_id: str, message_index: int, content:
 
 
 async def set_current_version(conversation_id: str, message_index: int, version_index: int) -> None:
-    """Switch which version is currently displayed."""
     await conversations_col.update_one(
         {"_id": ObjectId(conversation_id)},
         {"$set": {f"messages.{message_index}.current_version": version_index}}
@@ -111,3 +106,23 @@ async def update_conversation_title(conversation_id: str, title: str) -> None:
         {"_id": ObjectId(conversation_id)},
         {"$set": {"title": title, "updated_at": utcnow()}}
     )
+
+
+async def save_feedback(
+    conversation_id: str,
+    message_index: int,
+    version_index: int,
+    rating: str,        # "up" or "down"
+    reason: str | None, # required for "down"
+) -> dict:
+    doc = {
+        "conversation_id": conversation_id,
+        "message_index": message_index,
+        "version_index": version_index,
+        "rating": rating,
+        "reason": reason,
+        "created_at": utcnow(),
+    }
+    result = await feedback_col.insert_one(doc)
+    doc["_id"] = result.inserted_id
+    return serialize(doc)
