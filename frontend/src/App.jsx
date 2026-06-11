@@ -24,7 +24,7 @@ const TOUR_STEPS = [
   { title: "Conversation History", body: "All your past chats are saved here automatically." },
   { title: "New Chat", body: "Click '+ New Chat' to start a fresh conversation." },
   { title: "Ask a Question", body: "Type your question and press Enter to send." },
-  { title: "Regenerate & Feedback", body: "Click ↻ to regenerate. Use 👍 👎 to rate responses." },
+  { title: "Regenerate & Compare", body: "Click ↻ to regenerate or ⇔ Compare to view two versions side by side." },
   { title: "Export", body: "Click Export to download the conversation as Markdown or PDF." },
 ];
 
@@ -63,50 +63,27 @@ function downloadMarkdown(title, messages) {
 
 function printAsPDF(title, messages) {
   const md = buildMarkdown(title, messages);
-
-  // Convert markdown to simple HTML
   const html = md
     .replace(/^## (.+)$/gm, "<h2>$1</h2>")
     .replace(/^# (.+)$/gm, "<h1>$1</h1>")
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/^- (.+)$/gm, "<li>$1</li>")
-    .replace(/(<li>.*<\/li>)/gs, "<ul>$1</ul>")
-    .replace(/\n\n/g, "</p><p>")
-    .replace(/^(?!<[hul])/gm, "<p>")
-    .replace(/(?<![>])$/gm, "</p>");
+    .replace(/\n\n/g, "</p><p>");
 
   const printWindow = window.open("", "_blank");
-  printWindow.document.write(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>${title}</title>
-      <style>
-        body { font-family: Georgia, serif; max-width: 700px; margin: 40px auto; color: #111; line-height: 1.7; }
-        h1 { font-size: 1.6rem; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 24px; }
-        h2 { font-size: 1rem; font-weight: 700; color: #444; margin-top: 24px; margin-bottom: 4px; }
-        h2:first-of-type { color: #000; }
-        p { margin: 4px 0 12px; }
-        ul { margin: 4px 0 12px; padding-left: 20px; }
-        li { margin: 2px 0; font-size: 0.85rem; color: #555; }
-        strong { font-weight: 700; }
-        @media print {
-          body { margin: 20px; }
-        }
-      </style>
-    </head>
-    <body>${html}</body>
-    </html>
-  `);
+  printWindow.document.write(`<!DOCTYPE html><html><head><title>${title}</title>
+    <style>
+      body { font-family: Georgia, serif; max-width: 700px; margin: 40px auto; color: #111; line-height: 1.7; }
+      h1 { font-size: 1.6rem; border-bottom: 2px solid #111; padding-bottom: 8px; }
+      h2 { font-size: 1rem; font-weight: 700; color: #444; margin-top: 24px; }
+      p { margin: 4px 0 12px; } ul { margin: 4px 0 12px; padding-left: 20px; }
+      li { font-size: 0.85rem; color: #555; }
+    </style></head><body>${html}</body></html>`);
   printWindow.document.close();
   printWindow.focus();
-  setTimeout(() => {
-    printWindow.print();
-    printWindow.close();
-  }, 300);
+  setTimeout(() => { printWindow.print(); printWindow.close(); }, 300);
 }
 
-// ── Export dropdown ───────────────────────────────────────────────────────────
 function ExportMenu({ title, messages }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -123,24 +100,13 @@ function ExportMenu({ title, messages }) {
 
   return (
     <div className="relative" ref={ref}>
-      <Button variant="outline" size="sm" onClick={() => setOpen(!open)}>
-        ↓ Export
-      </Button>
+      <Button variant="outline" size="sm" onClick={() => setOpen(!open)}>↓ Export</Button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-popover border border-border
-                        rounded-xl shadow-lg p-1 w-44 flex flex-col">
-          <button
-            onClick={() => { downloadMarkdown(title, messages); setOpen(false); }}
-            className="text-left text-sm px-3 py-2 rounded-lg hover:bg-muted transition-colors"
-          >
-            📄 Markdown (.md)
-          </button>
-          <button
-            onClick={() => { printAsPDF(title, messages); setOpen(false); }}
-            className="text-left text-sm px-3 py-2 rounded-lg hover:bg-muted transition-colors"
-          >
-            🖨️ PDF (print)
-          </button>
+        <div className="absolute right-0 top-full mt-1 z-50 bg-popover border border-border rounded-xl shadow-lg p-1 w-44 flex flex-col">
+          <button onClick={() => { downloadMarkdown(title, messages); setOpen(false); }}
+            className="text-left text-sm px-3 py-2 rounded-lg hover:bg-muted transition-colors">📄 Markdown (.md)</button>
+          <button onClick={() => { printAsPDF(title, messages); setOpen(false); }}
+            className="text-left text-sm px-3 py-2 rounded-lg hover:bg-muted transition-colors">🖨️ PDF (print)</button>
         </div>
       )}
     </div>
@@ -202,12 +168,11 @@ function CitationBadge({ num, sources }) {
   );
 }
 
-// ── Sources panel ─────────────────────────────────────────────────────────────
 function SourcesPanel({ sources }) {
   const [open, setOpen] = useState(false);
   if (!sources?.length) return null;
   return (
-    <div className="mt-2 max-w-[75%]">
+    <div className="mt-2">
       <button onClick={() => setOpen(!open)}
         className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
         <span>{open ? "▾" : "▸"}</span>
@@ -218,10 +183,10 @@ function SourcesPanel({ sources }) {
           {sources.map((s, i) => (
             <div key={i} className="bg-muted/50 rounded-xl p-3 text-xs border border-border">
               <div className="flex items-center justify-between mb-1">
-                <span className="font-semibold text-foreground">[{i + 1}] p.{s.page} · {s.type}</span>
+                <span className="font-semibold">[{i + 1}] p.{s.page} · {s.type}</span>
                 <span className="text-muted-foreground/60">score: {s.rerank_score}</span>
               </div>
-              <p className="text-muted-foreground leading-relaxed">{s.text}</p>
+              <p className="text-muted-foreground">{s.text}</p>
             </div>
           ))}
         </div>
@@ -230,22 +195,71 @@ function SourcesPanel({ sources }) {
   );
 }
 
-// ── Cited markdown ────────────────────────────────────────────────────────────
 function CitedMarkdown({ content, streaming, sources }) {
   const segments = content.split(/(\[\d+\])/g);
   return (
     <div className="prose prose-sm max-w-none dark:prose-invert
-                    prose-p:my-1 prose-ul:my-1 prose-ol:my-1
-                    prose-li:my-0 prose-headings:my-2
+                    prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-2
                     prose-code:bg-muted prose-code:px-1 prose-code:rounded">
       {segments.map((seg, i) => {
         const match = seg.match(/^\[(\d+)\]$/);
         if (match) return <CitationBadge key={i} num={parseInt(match[1])} sources={sources} />;
         return seg ? <ReactMarkdown key={i}>{seg}</ReactMarkdown> : null;
       })}
-      {streaming && (
-        <span className="inline-block w-[2px] h-[14px] bg-foreground ml-0.5 animate-pulse align-middle" />
-      )}
+      {streaming && <span className="inline-block w-[2px] h-[14px] bg-foreground ml-0.5 animate-pulse align-middle" />}
+    </div>
+  );
+}
+
+// ── Compare view ──────────────────────────────────────────────────────────────
+function CompareView({ versionA, versionB, streaming, onKeep, onClose }) {
+  return (
+    <div className="w-full border border-border rounded-2xl overflow-hidden mt-1">
+      <div className="flex items-center justify-between px-4 py-2 bg-muted/50 border-b border-border">
+        <span className="text-xs font-semibold text-muted-foreground">Comparing versions</span>
+        <button onClick={onClose} className="text-xs text-muted-foreground hover:text-foreground">✕ Exit compare</button>
+      </div>
+
+      <div className="grid grid-cols-2 divide-x divide-border">
+        {/* Version A */}
+        <div className="p-4 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted-foreground">Version A</span>
+            <button onClick={() => onKeep("A")}
+              className="text-xs bg-primary text-primary-foreground px-2 py-1 rounded-lg hover:opacity-90 transition-opacity">
+              Keep A
+            </button>
+          </div>
+          <div className="text-sm">
+            <CitedMarkdown content={versionA.content} streaming={false} sources={versionA.sources} />
+          </div>
+          <SourcesPanel sources={versionA.sources} />
+        </div>
+
+        {/* Version B */}
+        <div className="p-4 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted-foreground">Version B</span>
+            <button onClick={() => onKeep("B")} disabled={streaming}
+              className="text-xs bg-primary text-primary-foreground px-2 py-1 rounded-lg hover:opacity-90 transition-opacity disabled:opacity-40">
+              Keep B
+            </button>
+          </div>
+          <div className="text-sm">
+            {streaming && !versionB.content ? (
+              <div className="flex flex-col gap-2">
+                <p className="text-xs text-muted-foreground italic">Generating version B…</p>
+                <div className="h-1 w-full bg-muted-foreground/20 rounded-full overflow-hidden">
+                  <div className="h-full bg-primary rounded-full animate-pulse w-2/3" />
+                </div>
+              </div>
+            ) : (
+              <CitedMarkdown content={versionB.content} streaming={streaming} sources={versionB.sources} />
+            )}
+          </div>
+          {!streaming && <SourcesPanel sources={versionB.sources} />}
+        </div>
+      </div>
     </div>
   );
 }
@@ -255,10 +269,8 @@ function OtherReasonInput({ onSubmit, onCancel }) {
   const [text, setText] = useState("");
   return (
     <div className="flex flex-col gap-1 px-2 py-1">
-      <input
-        autoFocus
-        className="text-xs border border-input rounded-lg px-2 py-1 bg-background
-                   focus:outline-none focus:ring-1 focus:ring-ring"
+      <input autoFocus
+        className="text-xs border border-input rounded-lg px-2 py-1 bg-background focus:outline-none focus:ring-1 focus:ring-ring"
         placeholder="Describe the issue…"
         value={text}
         onChange={(e) => setText(e.target.value)}
@@ -269,17 +281,13 @@ function OtherReasonInput({ onSubmit, onCancel }) {
       />
       <div className="flex gap-1 justify-end">
         <button onClick={onCancel} className="text-[10px] text-muted-foreground hover:text-foreground">Cancel</button>
-        <button
-          disabled={!text.trim()}
-          onClick={() => onSubmit(text.trim())}
-          className="text-[10px] text-primary hover:underline disabled:opacity-30"
-        >Submit</button>
+        <button disabled={!text.trim()} onClick={() => onSubmit(text.trim())}
+          className="text-[10px] text-primary hover:underline disabled:opacity-30">Submit</button>
       </div>
     </div>
   );
 }
 
-// ── Feedback buttons ──────────────────────────────────────────────────────────
 function FeedbackButtons({ message, activeId }) {
   const [status, setStatus] = useState(null);
   const [showReasons, setShowReasons] = useState(false);
@@ -290,68 +298,45 @@ function FeedbackButtons({ message, activeId }) {
     if (status || submitting) return;
     setSubmitting(true);
     try {
-      await submitFeedback({
-        conversationId: activeId,
-        messageIndex: message.messageIndex,
-        versionIndex: currentVersion,
-        rating: "up",
-        reason: null,
-      });
+      await submitFeedback({ conversationId: activeId, messageIndex: message.messageIndex, versionIndex: currentVersion, rating: "up", reason: null });
       setStatus("up");
-    } catch (e) { console.error(e); }
-    finally { setSubmitting(false); }
+    } catch (e) { console.error(e); } finally { setSubmitting(false); }
   }
 
   async function handleReason(reason) {
     setShowReasons(false);
     setSubmitting(true);
     try {
-      await submitFeedback({
-        conversationId: activeId,
-        messageIndex: message.messageIndex,
-        versionIndex: currentVersion,
-        rating: "down",
-        reason,
-      });
+      await submitFeedback({ conversationId: activeId, messageIndex: message.messageIndex, versionIndex: currentVersion, rating: "down", reason });
       setStatus("down");
-    } catch (e) { console.error(e); }
-    finally { setSubmitting(false); }
+    } catch (e) { console.error(e); } finally { setSubmitting(false); }
   }
 
   return (
     <div className="relative flex items-center gap-1">
       <button onClick={handleUp} disabled={submitting || status !== null}
-        className={`text-base transition-all ${status === "up" ? "opacity-100" : "opacity-40 hover:opacity-100"} disabled:cursor-default`}
-        title="Good response">👍</button>
+        className={`text-base transition-all ${status === "up" ? "opacity-100" : "opacity-40 hover:opacity-100"} disabled:cursor-default`}>👍</button>
       <button onClick={() => !status && !submitting && setShowReasons(true)} disabled={submitting || status !== null}
-        className={`text-base transition-all ${status === "down" ? "opacity-100" : "opacity-40 hover:opacity-100"} disabled:cursor-default`}
-        title="Bad response">👎</button>
-
+        className={`text-base transition-all ${status === "down" ? "opacity-100" : "opacity-40 hover:opacity-100"} disabled:cursor-default`}>👎</button>
       {showReasons && (
-        <div className="absolute bottom-full left-0 mb-2 z-50 bg-popover border border-border
-                        rounded-xl shadow-lg p-2 flex flex-col gap-1 w-52">
+        <div className="absolute bottom-full left-0 mb-2 z-50 bg-popover border border-border rounded-xl shadow-lg p-2 flex flex-col gap-1 w-52">
           <p className="text-xs font-semibold text-foreground px-2 py-1">Why was this bad?</p>
           {FEEDBACK_REASONS.map((reason) =>
             reason === "Other" ? (
               <OtherReasonInput key={reason} onSubmit={handleReason} onCancel={() => setShowReasons(false)} />
             ) : (
               <button key={reason} onClick={() => handleReason(reason)}
-                className="text-left text-xs px-2 py-1.5 rounded-lg hover:bg-muted transition-colors text-foreground">
-                {reason}
-              </button>
+                className="text-left text-xs px-2 py-1.5 rounded-lg hover:bg-muted transition-colors text-foreground">{reason}</button>
             )
           )}
           <button onClick={() => setShowReasons(false)}
-            className="text-left text-xs px-2 py-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground">
-            Cancel
-          </button>
+            className="text-left text-xs px-2 py-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground">Cancel</button>
         </div>
       )}
     </div>
   );
 }
 
-// ── Loading indicator ─────────────────────────────────────────────────────────
 function ThinkingIndicator({ stage }) {
   const stages = {
     retrieving: { label: "Searching documents…", width: "w-1/3" },
@@ -371,25 +356,37 @@ function ThinkingIndicator({ stage }) {
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────────
-function MessageBubble({ message, onRegenerate, activeId }) {
+function MessageBubble({ message, onRegenerate, onCompare, onKeepVersion, activeId }) {
   const isUser = message.role === "user";
   const versions = message.versions || [{ content: message.content, sources: message.sources }];
   const currentIdx = message.currentVersion ?? 0;
   const current = versions[currentIdx];
 
   return (
-    <div className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
-      <div className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-        isUser
-          ? "bg-primary text-primary-foreground rounded-tr-sm"
-          : "bg-muted text-foreground rounded-tl-sm"
-      }`}>
-        {isUser ? message.content : (
-          <CitedMarkdown content={current.content} streaming={message.streaming} sources={current.sources} />
-        )}
-      </div>
+    <div className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"} w-full`}>
+      {!message.compareMode && (
+        <div className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+          isUser
+            ? "bg-primary text-primary-foreground rounded-tr-sm"
+            : "bg-muted text-foreground rounded-tl-sm"
+        }`}>
+          {isUser ? message.content : (
+            <CitedMarkdown content={current.content} streaming={message.streaming} sources={current.sources} />
+          )}
+        </div>
+      )}
 
-      {!isUser && !message.streaming && (
+      {!isUser && message.compareMode && (
+        <CompareView
+          versionA={current}
+          versionB={{ content: message.compareContent || "", sources: message.compareSources || [] }}
+          streaming={message.compareStreaming}
+          onKeep={(side) => onKeepVersion(message.id, side)}
+          onClose={() => onCompare(message.id, "close")}
+        />
+      )}
+
+      {!isUser && !message.streaming && !message.compareMode && (
         <div className="flex items-center gap-3 px-1">
           {versions.length > 1 && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -401,19 +398,18 @@ function MessageBubble({ message, onRegenerate, activeId }) {
             </div>
           )}
           <button onClick={() => onRegenerate("regenerate")}
-            className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
-            ↻ Regenerate
-          </button>
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors">↻ Regenerate</button>
+          <button onClick={() => onCompare(message.id, "start")}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors">⇔ Compare</button>
           {message.messageIndex != null && <FeedbackButtons message={message} activeId={activeId} />}
         </div>
       )}
 
-      {!isUser && <SourcesPanel sources={current.sources} />}
+      {!isUser && !message.compareMode && <SourcesPanel sources={current.sources} />}
     </div>
   );
 }
 
-// ── Sidebar ───────────────────────────────────────────────────────────────────
 function Sidebar({ conversations, activeId, onSelect, onNewChat }) {
   return (
     <aside className="w-64 shrink-0 border-r border-border flex flex-col bg-muted/30">
@@ -468,6 +464,7 @@ export default function App() {
           versions: m.versions || [{ content: m.content || "", sources: m.sources || [] }],
           currentVersion: m.current_version ?? 0,
           streaming: false, messageIndex: i,
+          compareMode: false, compareContent: "", compareSources: [], compareStreaming: false,
         };
       }
       return { id: i, role: "user", content: m.content, sources: [], streaming: false, messageIndex: i };
@@ -502,6 +499,7 @@ export default function App() {
       id: assistantId, role: "assistant",
       versions: [{ content: "", sources: [] }],
       currentVersion: 0, streaming: true, messageIndex: null,
+      compareMode: false, compareContent: "", compareSources: [], compareStreaming: false,
     };
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
@@ -611,6 +609,72 @@ export default function App() {
     });
   }
 
+  async function handleCompare(messageId, action) {
+    if (action === "close") {
+      setMessages((prev) => prev.map((m) =>
+        m.id === messageId ? { ...m, compareMode: false, compareContent: "", compareSources: [], compareStreaming: false } : m
+      ));
+      return;
+    }
+
+    const msgIdx = messages.findIndex((m) => m.id === messageId);
+    if (msgIdx < 1) return;
+    const userMsg = messages[msgIdx - 1];
+    const assistantMsg = messages[msgIdx];
+    if (!userMsg || userMsg.role !== "user") return;
+
+    setMessages((prev) => prev.map((m) =>
+      m.id === messageId
+        ? { ...m, compareMode: true, compareContent: "", compareSources: [], compareStreaming: true }
+        : m
+    ));
+
+    await regenerateMessage(userMsg.content, activeId, assistantMsg.messageIndex, {
+      onSources: (sources) => {
+        setMessages((prev) => prev.map((m) =>
+          m.id === messageId ? { ...m, compareSources: sources } : m
+        ));
+      },
+      onToken: (token) => {
+        setMessages((prev) => prev.map((m) =>
+          m.id === messageId ? { ...m, compareContent: (m.compareContent || "") + token } : m
+        ));
+      },
+      onDone: () => {
+        setMessages((prev) => prev.map((m) =>
+          m.id === messageId ? { ...m, compareStreaming: false } : m
+        ));
+      },
+      onError: (err) => {
+        setMessages((prev) => prev.map((m) =>
+          m.id === messageId ? { ...m, compareContent: `Error: ${err}`, compareStreaming: false } : m
+        ));
+      },
+    });
+  }
+
+  function handleKeepVersion(messageId, side) {
+    const msg = messages.find((m) => m.id === messageId);
+    if (!msg) return;
+
+    if (side === "A") {
+      setMessages((prev) => prev.map((m) =>
+        m.id === messageId ? { ...m, compareMode: false, compareContent: "", compareSources: [], compareStreaming: false } : m
+      ));
+    } else {
+      const newVersionIdx = msg.versions.length;
+      const newVersions = [...msg.versions, { content: msg.compareContent, sources: msg.compareSources }];
+      setMessages((prev) => prev.map((m) =>
+        m.id === messageId
+          ? { ...m, versions: newVersions, currentVersion: newVersionIdx, compareMode: false, compareContent: "", compareSources: [], compareStreaming: false }
+          : m
+      ));
+      if (msg.messageIndex != null && activeId) {
+        setMessageVersion(activeId, msg.messageIndex, newVersionIdx);
+      }
+    }
+  }
+
   function handleKeyDown(e) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   }
@@ -621,12 +685,7 @@ export default function App() {
   return (
     <div className="flex h-screen bg-background text-foreground">
       {showTour && <Tour onClose={() => setShowTour(false)} />}
-      <Sidebar
-        conversations={conversations}
-        activeId={activeId}
-        onSelect={handleSelectConversation}
-        onNewChat={handleNewChat}
-      />
+      <Sidebar conversations={conversations} activeId={activeId} onSelect={handleSelectConversation} onNewChat={handleNewChat} />
       <div className="flex flex-col flex-1 min-w-0">
         <header className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h1 className="text-lg font-semibold tracking-tight">RAG Chat</h1>
@@ -637,7 +696,7 @@ export default function App() {
         </header>
 
         <main className="flex-1 overflow-y-auto px-6 py-6">
-          <div className="max-w-2xl mx-auto flex flex-col gap-4">
+          <div className="max-w-4xl mx-auto flex flex-col gap-4">
             {messages.length === 0 && !isLoading && (
               <p className="text-center text-muted-foreground text-sm mt-20">
                 Ask anything about your documents to get started.
@@ -649,6 +708,8 @@ export default function App() {
                 message={msg}
                 activeId={activeId}
                 onRegenerate={(action, versionIdx) => handleRegenerate(msg.id, action, versionIdx)}
+                onCompare={(id, action) => handleCompare(id, action)}
+                onKeepVersion={(id, side) => handleKeepVersion(id, side)}
               />
             ))}
             {waitingForFirstToken && <ThinkingIndicator stage={loadingStage} />}
