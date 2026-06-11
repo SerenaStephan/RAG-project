@@ -1,4 +1,5 @@
 import json
+import random
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -12,6 +13,8 @@ from database import (
     list_conversations,
     get_conversation,
     append_message,
+    add_message_version,
+    set_current_version,
     update_conversation_title,
 )
 
@@ -26,30 +29,33 @@ app.add_middleware(
 )
 
 
-# ── Pydantic models ───────────────────────────────────────────────────────────
-
 class ChatRequest(BaseModel):
     query: str
     conversation_id: str
+
+
+class RegenerateRequest(BaseModel):
+    query: str
+    conversation_id: str
+    message_index: int
 
 
 class NewConversationRequest(BaseModel):
     title: str = "New Conversation"
 
 
-# ── Health ────────────────────────────────────────────────────────────────────
+class SetVersionRequest(BaseModel):
+    version_index: int
+
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-# ── Conversation endpoints ────────────────────────────────────────────────────
-
 @app.post("/conversations")
 async def new_conversation(body: NewConversationRequest):
-    convo = await create_conversation(body.title)
-    return convo
+    return await create_conversation(body.title)
 
 
 @app.get("/conversations")
@@ -65,7 +71,11 @@ async def get_conversation_route(conversation_id: str):
     return convo
 
 
-# ── Streaming chat ────────────────────────────────────────────────────────────
+@app.post("/conversations/{conversation_id}/messages/{message_index}/version")
+async def set_version(conversation_id: str, message_index: int, body: SetVersionRequest):
+    await set_current_version(conversation_id, message_index, body.version_index)
+    return {"ok": True}
+
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
@@ -75,20 +85,82 @@ async def chat_stream(request: ChatRequest):
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    # Verify conversation exists
     convo = await get_conversation(conversation_id)
     if not convo:
         raise HTTPException(status_code=404, detail="Conversation not found.")
 
-    # Save user message immediately
     await append_message(conversation_id, "user", query, [])
 
-    # Retrieve → rerank
     retrieved_chunks = retrieve_chunks(query, top_k=10)
     if not retrieved_chunks:
         raise HTTPException(status_code=404, detail="No relevant chunks found.")
 
     best_chunks = rerank_chunks(query, retrieved_chunks, top_n=3)
+    sources = [
+        {
+            "page": chunk["page"],
+            "type": chunk["type"],
+            "text": chunk["text"][:300],
+            "rerank_score": round(chunk["rerank_score"], 4),
+        }
+        for chunk in best_chunks
+    ]
+
+    prompt = build_prompt(query, best_chunks)
+    is_first_message = len(convo.get("messages", [])) == 0
+
+    async def event_stream():
+        from langchain_ollama import ChatOllama
+        full_answer = ""
+
+        yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+
+        if is_first_message:
+            title = await generate_title(query)
+            await update_conversation_title(conversation_id, title)
+            yield f"data: {json.dumps({'type': 'title', 'title': title, 'conversation_id': conversation_id})}\n\n"
+
+        llm = ChatOllama(model="llama3.2:3b", temperature=0.7)
+        async for chunk in llm.astream(prompt):
+            token = chunk.content
+            token = token.replace("Computer Incident Society (CIS)", "CIS")
+            token = token.replace("Computer Incident Society", "CIS")
+            if token:
+                full_answer += token
+                yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+
+        await append_message(conversation_id, "assistant", full_answer, sources)
+        convo_updated = await get_conversation(conversation_id)
+        msg_index = len(convo_updated.get("messages", [])) - 1
+        yield f"data: {json.dumps({'type': 'done', 'message_index': msg_index})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/chat/regenerate")
+async def chat_regenerate(request: RegenerateRequest):
+    query = request.query.strip()
+    conversation_id = request.conversation_id
+    message_index = request.message_index
+
+    if not query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty.")
+
+    convo = await get_conversation(conversation_id)
+    if not convo:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    retrieved_chunks = retrieve_chunks(query, top_k=10)
+    if not retrieved_chunks:
+        raise HTTPException(status_code=404, detail="No relevant chunks found.")
+
+    # Use top 5 then randomly sample 3 for variety
+    top_chunks = rerank_chunks(query, retrieved_chunks, top_n=5)
+    best_chunks = random.sample(top_chunks, min(3, len(top_chunks)))
 
     sources = [
         {
@@ -101,40 +173,25 @@ async def chat_stream(request: ChatRequest):
     ]
 
     prompt = build_prompt(query, best_chunks)
-
-    # Auto-generate title from first question if still default
-    is_first_message = len(convo.get("messages", [])) == 0
-    if is_first_message:
-        title = await generate_title(query)
-        await update_conversation_title(conversation_id, title)
+    prompt += "\n\nNote: Provide a fresh perspective with different phrasing and structure from any previous answer."
 
     async def event_stream():
         from langchain_ollama import ChatOllama
-
         full_answer = ""
 
         yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
 
-        # If title was just generated, send it to frontend
-        if is_first_message:
-            title = await generate_title(query)
-            yield f"data: {json.dumps({'type': 'title', 'title': title, 'conversation_id': conversation_id})}\n\n"
-
-        llm = ChatOllama(model="llama3.2:3b", temperature=0)
-
+        llm = ChatOllama(model="llama3.2:3b", temperature=0.8)
         async for chunk in llm.astream(prompt):
             token = chunk.content
             token = token.replace("Computer Incident Society (CIS)", "CIS")
             token = token.replace("Computer Incident Society", "CIS")
-
             if token:
                 full_answer += token
                 yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
 
-        # Save assistant message after full generation
-        await append_message(conversation_id, "assistant", full_answer, sources)
-
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        result = await add_message_version(conversation_id, message_index, full_answer, sources)
+        yield f"data: {json.dumps({'type': 'done', 'version_index': result.get('version_index', 0)})}\n\n"
 
     return StreamingResponse(
         event_stream(),
@@ -143,12 +200,8 @@ async def chat_stream(request: ChatRequest):
     )
 
 
-# ── Title generation ──────────────────────────────────────────────────────────
-
-
 async def generate_title(query: str) -> str:
     from langchain_ollama import ChatOllama
-
     llm = ChatOllama(model="llama3.2:3b", temperature=0)
     prompt = f"""Create a short 4-6 word title summarizing this question about cybersecurity.
 CIS refers to the Center for Internet Security, not biology.

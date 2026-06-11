@@ -14,12 +14,9 @@ def utcnow():
 
 
 def serialize(doc):
-    """Convert MongoDB document to JSON-serializable dict."""
     doc["id"] = str(doc.pop("_id"))
     return doc
 
-
-# ── Conversations ─────────────────────────────────────────────────────────────
 
 async def create_conversation(title: str) -> dict:
     doc = {
@@ -35,7 +32,7 @@ async def create_conversation(title: str) -> dict:
 
 async def list_conversations() -> list:
     cursor = conversations_col.find(
-        {}, {"messages": 0}  # exclude messages for performance
+        {}, {"messages": 0}
     ).sort("updated_at", -1)
     docs = await cursor.to_list(length=100)
     return [serialize(d) for d in docs]
@@ -49,18 +46,63 @@ async def get_conversation(conversation_id: str) -> dict | None:
 
 
 async def append_message(conversation_id: str, role: str, content: str, sources: list) -> None:
-    message = {
-        "role": role,
-        "content": content,
-        "sources": sources,
-        "timestamp": utcnow(),
-    }
+    """Append a new message. Assistant messages store versions array."""
+    if role == "assistant":
+        message = {
+            "role": role,
+            "versions": [{"content": content, "sources": sources}],
+            "current_version": 0,
+            "timestamp": utcnow(),
+        }
+    else:
+        message = {
+            "role": role,
+            "content": content,
+            "sources": sources,
+            "timestamp": utcnow(),
+        }
     await conversations_col.update_one(
         {"_id": ObjectId(conversation_id)},
         {
             "$push": {"messages": message},
             "$set": {"updated_at": utcnow()},
         }
+    )
+
+
+async def add_message_version(conversation_id: str, message_index: int, content: str, sources: list) -> dict:
+    """Add a new version to an existing assistant message."""
+    convo = await conversations_col.find_one({"_id": ObjectId(conversation_id)})
+    if not convo:
+        return {}
+
+    messages = convo.get("messages", [])
+    if message_index >= len(messages):
+        return {}
+
+    msg = messages[message_index]
+    versions = msg.get("versions", [])
+    versions.append({"content": content, "sources": sources})
+    new_version_index = len(versions) - 1
+
+    await conversations_col.update_one(
+        {"_id": ObjectId(conversation_id)},
+        {
+            "$set": {
+                f"messages.{message_index}.versions": versions,
+                f"messages.{message_index}.current_version": new_version_index,
+                "updated_at": utcnow(),
+            }
+        }
+    )
+    return {"version_index": new_version_index}
+
+
+async def set_current_version(conversation_id: str, message_index: int, version_index: int) -> None:
+    """Switch which version is currently displayed."""
+    await conversations_col.update_one(
+        {"_id": ObjectId(conversation_id)},
+        {"$set": {f"messages.{message_index}.current_version": version_index}}
     )
 
 

@@ -1,7 +1,5 @@
 const API_BASE = "http://localhost:8000";
 
-// ── Conversations ─────────────────────────────────────────────────────────────
-
 export async function createConversation(title = "New Conversation") {
   const res = await fetch(`${API_BASE}/conversations`, {
     method: "POST",
@@ -24,14 +22,20 @@ export async function fetchConversation(id) {
   return res.json();
 }
 
-// ── Streaming chat ────────────────────────────────────────────────────────────
+export async function setMessageVersion(conversationId, messageIndex, versionIndex) {
+  await fetch(`${API_BASE}/conversations/${conversationId}/messages/${messageIndex}/version`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ version_index: versionIndex }),
+  });
+}
 
-export async function streamChatQuery(query, conversationId, { onToken, onSources, onTitle, onError, onDone }) {
+async function streamRequest(url, body, { onToken, onSources, onTitle, onDone, onError }) {
   try {
-    const response = await fetch(`${API_BASE}/chat/stream`, {
+    const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, conversation_id: conversationId }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -46,7 +50,6 @@ export async function streamChatQuery(query, conversationId, { onToken, onSource
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-
       buffer += decoder.decode(value, { stream: true });
       const parts = buffer.split("\n\n");
       buffer = parts.pop();
@@ -54,21 +57,34 @@ export async function streamChatQuery(query, conversationId, { onToken, onSource
       for (const part of parts) {
         const line = part.trim();
         if (!line.startsWith("data: ")) continue;
-
         try {
           const json = JSON.parse(line.slice(6));
           if (json.type === "sources") onSources?.(json.sources);
           else if (json.type === "token") onToken?.(json.token);
           else if (json.type === "title") onTitle?.(json.title, json.conversation_id);
-          else if (json.type === "done") onDone?.();
-        } catch {
-          // ignore malformed events
-        }
+          else if (json.type === "done") onDone?.(json.message_index, json.version_index);
+        } catch { /* ignore */ }
       }
     }
   } catch (err) {
     onError?.(err.message);
   }
+}
+
+export async function streamChatQuery(query, conversationId, callbacks) {
+  return streamRequest(
+    `${API_BASE}/chat/stream`,
+    { query, conversation_id: conversationId },
+    callbacks
+  );
+}
+
+export async function regenerateMessage(query, conversationId, messageIndex, callbacks) {
+  return streamRequest(
+    `${API_BASE}/chat/regenerate`,
+    { query, conversation_id: conversationId, message_index: messageIndex },
+    callbacks
+  );
 }
 
 export async function checkHealth() {
