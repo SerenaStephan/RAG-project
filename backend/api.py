@@ -1,8 +1,11 @@
 import json
 import random
+import subprocess
+import tempfile
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 
 from retrieval import retrieve_chunks
@@ -30,47 +33,50 @@ app.add_middleware(
 )
 
 
+# ── Pydantic models ───────────────────────────────────────────────────────────
+
 class ChatRequest(BaseModel):
     query: str
     conversation_id: str
-
 
 class RegenerateRequest(BaseModel):
     query: str
     conversation_id: str
     message_index: int
 
-
 class NewConversationRequest(BaseModel):
     title: str = "New Conversation"
 
-
 class SetVersionRequest(BaseModel):
     version_index: int
-
 
 class FeedbackRequest(BaseModel):
     conversation_id: str
     message_index: int
     version_index: int
-    rating: str         # "up" or "down"
+    rating: str
     reason: str | None = None
 
+class PresentationRequest(BaseModel):
+    topic: str
+
+
+# ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
+# ── Conversations ─────────────────────────────────────────────────────────────
+
 @app.post("/conversations")
 async def new_conversation(body: NewConversationRequest):
     return await create_conversation(body.title)
 
-
 @app.get("/conversations")
 async def get_conversations():
     return await list_conversations()
-
 
 @app.get("/conversations/{conversation_id}")
 async def get_conversation_route(conversation_id: str):
@@ -79,26 +85,25 @@ async def get_conversation_route(conversation_id: str):
         raise HTTPException(status_code=404, detail="Conversation not found.")
     return convo
 
-
 @app.post("/conversations/{conversation_id}/messages/{message_index}/version")
 async def set_version(conversation_id: str, message_index: int, body: SetVersionRequest):
     await set_current_version(conversation_id, message_index, body.version_index)
     return {"ok": True}
 
 
+# ── Feedback ──────────────────────────────────────────────────────────────────
+
 @app.post("/feedback")
 async def submit_feedback(body: FeedbackRequest):
     if body.rating == "down" and not body.reason:
         raise HTTPException(status_code=400, detail="Reason is required for negative feedback.")
     result = await save_feedback(
-        body.conversation_id,
-        body.message_index,
-        body.version_index,
-        body.rating,
-        body.reason,
+        body.conversation_id, body.message_index, body.version_index, body.rating, body.reason
     )
     return result
 
+
+# ── Chat stream ───────────────────────────────────────────────────────────────
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
@@ -121,10 +126,8 @@ async def chat_stream(request: ChatRequest):
     best_chunks = rerank_chunks(query, retrieved_chunks, top_n=3)
     sources = [
         {
-            "page": chunk["page"],
-            "type": chunk["type"],
-            "text": chunk["text"][:300],
-            "rerank_score": round(chunk["rerank_score"], 4),
+            "page": chunk["page"], "type": chunk["type"],
+            "text": chunk["text"][:300], "rerank_score": round(chunk["rerank_score"], 4),
         }
         for chunk in best_chunks
     ]
@@ -164,6 +167,8 @@ async def chat_stream(request: ChatRequest):
     )
 
 
+# ── Regenerate ────────────────────────────────────────────────────────────────
+
 @app.post("/chat/regenerate")
 async def chat_regenerate(request: RegenerateRequest):
     query = request.query.strip()
@@ -186,10 +191,8 @@ async def chat_regenerate(request: RegenerateRequest):
 
     sources = [
         {
-            "page": chunk["page"],
-            "type": chunk["type"],
-            "text": chunk["text"][:300],
-            "rerank_score": round(chunk["rerank_score"], 4),
+            "page": chunk["page"], "type": chunk["type"],
+            "text": chunk["text"][:300], "rerank_score": round(chunk["rerank_score"], 4),
         }
         for chunk in best_chunks
     ]
@@ -221,6 +224,102 @@ async def chat_regenerate(request: RegenerateRequest):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+
+# ── PowerPoint generation ─────────────────────────────────────────────────────
+
+@app.post("/presentation")
+async def generate_presentation(request: PresentationRequest):
+    topic = request.topic.strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="Topic cannot be empty.")
+
+    # Step 1 — Retrieve relevant chunks
+    retrieved_chunks = retrieve_chunks(topic, top_k=10)
+    if not retrieved_chunks:
+        raise HTTPException(status_code=404, detail="No relevant chunks found for this topic.")
+
+    best_chunks = rerank_chunks(topic, retrieved_chunks, top_n=5)
+
+    # Step 2 — Build context
+    context_parts = []
+    for i, item in enumerate(best_chunks, start=1):
+        context_parts.append(f"[{i}] Page {item['page']}: {item['text']}")
+    context = "\n\n".join(context_parts)
+
+    # Step 3 — Ask Ollama to generate slide structure as JSON
+    from langchain_ollama import ChatOllama
+    llm = ChatOllama(model="llama3.2:3b", temperature=0.3)
+
+    slide_prompt = f"""You are generating content for a PowerPoint presentation about: "{topic}"
+
+Using ONLY the context below, create exactly 5 slides.
+Return ONLY valid JSON, no explanation, no markdown, no backticks.
+
+Format:
+{{
+  "title": "presentation title",
+  "slides": [
+    {{
+      "heading": "slide title",
+      "bullets": ["bullet 1", "bullet 2", "bullet 3"],
+      "note": "speaker note"
+    }}
+  ]
+}}
+
+Rules:
+- Each slide must have 3-5 bullets
+- Keep bullets concise (max 12 words each)
+- Do not expand the acronym CIS
+- Use only information from the context
+
+Context:
+{context}
+
+JSON:"""
+
+    response = await llm.ainvoke(slide_prompt)
+    raw = response.content.strip()
+
+    # Strip markdown fences if model added them
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    raw = raw.strip()
+
+    try:
+        slide_data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail=f"Failed to parse slide structure from model output: {raw[:200]}")
+
+    # Step 4 — Generate .pptx using Node.js script
+    with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as tmp:
+        output_path = tmp.name
+
+    script_path = os.path.join(os.path.dirname(__file__), "generate_pptx.cjs")
+
+    result = subprocess.run(
+        ["node", script_path, json.dumps(slide_data), output_path],
+        capture_output=True, text=True, timeout=30
+    )
+
+    if result.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"PPTX generation failed: {result.stderr}")
+
+    # Step 5 — Return the file
+    safe_title = slide_data.get("title", topic).replace(" ", "_")[:40]
+    filename = f"{safe_title}.pptx"
+
+    return FileResponse(
+        path=output_path,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=filename,
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+# ── Title generation ──────────────────────────────────────────────────────────
 
 async def generate_title(query: str) -> str:
     from langchain_ollama import ChatOllama
