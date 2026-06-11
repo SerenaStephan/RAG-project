@@ -24,8 +24,128 @@ const TOUR_STEPS = [
   { title: "Conversation History", body: "All your past chats are saved here automatically." },
   { title: "New Chat", body: "Click '+ New Chat' to start a fresh conversation." },
   { title: "Ask a Question", body: "Type your question and press Enter to send." },
-  { title: "Regenerate & Feedback", body: "Click ↻ to regenerate. Use 👍 👎 to rate responses. 👎 requires a reason." },
+  { title: "Regenerate & Feedback", body: "Click ↻ to regenerate. Use 👍 👎 to rate responses." },
+  { title: "Export", body: "Click Export to download the conversation as Markdown or PDF." },
 ];
+
+// ── Export helpers ────────────────────────────────────────────────────────────
+function buildMarkdown(title, messages) {
+  const lines = [`# ${title}`, ""];
+  for (const msg of messages) {
+    if (msg.role === "user") {
+      lines.push(`## You`, msg.content, "");
+    } else {
+      const versions = msg.versions || [{ content: msg.content || "", sources: msg.sources || [] }];
+      const current = versions[msg.currentVersion ?? 0];
+      lines.push(`## Assistant`, current.content, "");
+      if (current.sources?.length) {
+        lines.push("**Sources:**");
+        current.sources.forEach((s, i) => {
+          lines.push(`- [${i + 1}] p.${s.page} · ${s.type} — ${s.text?.slice(0, 120)}...`);
+        });
+        lines.push("");
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
+function downloadMarkdown(title, messages) {
+  const md = buildMarkdown(title, messages);
+  const blob = new Blob([md], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${title.replace(/[^a-z0-9]/gi, "_").toLowerCase()}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function printAsPDF(title, messages) {
+  const md = buildMarkdown(title, messages);
+
+  // Convert markdown to simple HTML
+  const html = md
+    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
+    .replace(/^# (.+)$/gm, "<h1>$1</h1>")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/^- (.+)$/gm, "<li>$1</li>")
+    .replace(/(<li>.*<\/li>)/gs, "<ul>$1</ul>")
+    .replace(/\n\n/g, "</p><p>")
+    .replace(/^(?!<[hul])/gm, "<p>")
+    .replace(/(?<![>])$/gm, "</p>");
+
+  const printWindow = window.open("", "_blank");
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>${title}</title>
+      <style>
+        body { font-family: Georgia, serif; max-width: 700px; margin: 40px auto; color: #111; line-height: 1.7; }
+        h1 { font-size: 1.6rem; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 24px; }
+        h2 { font-size: 1rem; font-weight: 700; color: #444; margin-top: 24px; margin-bottom: 4px; }
+        h2:first-of-type { color: #000; }
+        p { margin: 4px 0 12px; }
+        ul { margin: 4px 0 12px; padding-left: 20px; }
+        li { margin: 2px 0; font-size: 0.85rem; color: #555; }
+        strong { font-weight: 700; }
+        @media print {
+          body { margin: 20px; }
+        }
+      </style>
+    </head>
+    <body>${html}</body>
+    </html>
+  `);
+  printWindow.document.close();
+  printWindow.focus();
+  setTimeout(() => {
+    printWindow.print();
+    printWindow.close();
+  }, 300);
+}
+
+// ── Export dropdown ───────────────────────────────────────────────────────────
+function ExportMenu({ title, messages }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  if (!messages.length) return null;
+
+  return (
+    <div className="relative" ref={ref}>
+      <Button variant="outline" size="sm" onClick={() => setOpen(!open)}>
+        ↓ Export
+      </Button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-50 bg-popover border border-border
+                        rounded-xl shadow-lg p-1 w-44 flex flex-col">
+          <button
+            onClick={() => { downloadMarkdown(title, messages); setOpen(false); }}
+            className="text-left text-sm px-3 py-2 rounded-lg hover:bg-muted transition-colors"
+          >
+            📄 Markdown (.md)
+          </button>
+          <button
+            onClick={() => { printAsPDF(title, messages); setOpen(false); }}
+            className="text-left text-sm px-3 py-2 rounded-lg hover:bg-muted transition-colors"
+          >
+            🖨️ PDF (print)
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Tour ──────────────────────────────────────────────────────────────────────
 function Tour({ onClose }) {
@@ -148,17 +268,12 @@ function OtherReasonInput({ onSubmit, onCancel }) {
         }}
       />
       <div className="flex gap-1 justify-end">
-        <button onClick={onCancel}
-          className="text-[10px] text-muted-foreground hover:text-foreground">
-          Cancel
-        </button>
+        <button onClick={onCancel} className="text-[10px] text-muted-foreground hover:text-foreground">Cancel</button>
         <button
           disabled={!text.trim()}
           onClick={() => onSubmit(text.trim())}
           className="text-[10px] text-primary hover:underline disabled:opacity-30"
-        >
-          Submit
-        </button>
+        >Submit</button>
       </div>
     </div>
   );
@@ -183,11 +298,8 @@ function FeedbackButtons({ message, activeId }) {
         reason: null,
       });
       setStatus("up");
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setSubmitting(false);
-    }
+    } catch (e) { console.error(e); }
+    finally { setSubmitting(false); }
   }
 
   async function handleReason(reason) {
@@ -202,35 +314,18 @@ function FeedbackButtons({ message, activeId }) {
         reason,
       });
       setStatus("down");
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setSubmitting(false);
-    }
+    } catch (e) { console.error(e); }
+    finally { setSubmitting(false); }
   }
 
   return (
     <div className="relative flex items-center gap-1">
-      <button
-        onClick={handleUp}
-        disabled={submitting || status !== null}
-        className={`text-base transition-all ${
-          status === "up" ? "opacity-100" : "opacity-40 hover:opacity-100"
-        } disabled:cursor-default`}
-        title="Good response"
-      >
-        👍
-      </button>
-      <button
-        onClick={() => !status && !submitting && setShowReasons(true)}
-        disabled={submitting || status !== null}
-        className={`text-base transition-all ${
-          status === "down" ? "opacity-100" : "opacity-40 hover:opacity-100"
-        } disabled:cursor-default`}
-        title="Bad response"
-      >
-        👎
-      </button>
+      <button onClick={handleUp} disabled={submitting || status !== null}
+        className={`text-base transition-all ${status === "up" ? "opacity-100" : "opacity-40 hover:opacity-100"} disabled:cursor-default`}
+        title="Good response">👍</button>
+      <button onClick={() => !status && !submitting && setShowReasons(true)} disabled={submitting || status !== null}
+        className={`text-base transition-all ${status === "down" ? "opacity-100" : "opacity-40 hover:opacity-100"} disabled:cursor-default`}
+        title="Bad response">👎</button>
 
       {showReasons && (
         <div className="absolute bottom-full left-0 mb-2 z-50 bg-popover border border-border
@@ -238,25 +333,16 @@ function FeedbackButtons({ message, activeId }) {
           <p className="text-xs font-semibold text-foreground px-2 py-1">Why was this bad?</p>
           {FEEDBACK_REASONS.map((reason) =>
             reason === "Other" ? (
-              <OtherReasonInput
-                key={reason}
-                onSubmit={handleReason}
-                onCancel={() => setShowReasons(false)}
-              />
+              <OtherReasonInput key={reason} onSubmit={handleReason} onCancel={() => setShowReasons(false)} />
             ) : (
-              <button
-                key={reason}
-                onClick={() => handleReason(reason)}
-                className="text-left text-xs px-2 py-1.5 rounded-lg hover:bg-muted transition-colors text-foreground"
-              >
+              <button key={reason} onClick={() => handleReason(reason)}
+                className="text-left text-xs px-2 py-1.5 rounded-lg hover:bg-muted transition-colors text-foreground">
                 {reason}
               </button>
             )
           )}
-          <button
-            onClick={() => setShowReasons(false)}
-            className="text-left text-xs px-2 py-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
-          >
+          <button onClick={() => setShowReasons(false)}
+            className="text-left text-xs px-2 py-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground">
             Cancel
           </button>
         </div>
@@ -299,11 +385,7 @@ function MessageBubble({ message, onRegenerate, activeId }) {
           : "bg-muted text-foreground rounded-tl-sm"
       }`}>
         {isUser ? message.content : (
-          <CitedMarkdown
-            content={current.content}
-            streaming={message.streaming}
-            sources={current.sources}
-          />
+          <CitedMarkdown content={current.content} streaming={message.streaming} sources={current.sources} />
         )}
       </div>
 
@@ -311,28 +393,18 @@ function MessageBubble({ message, onRegenerate, activeId }) {
         <div className="flex items-center gap-3 px-1">
           {versions.length > 1 && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
-              <button
-                disabled={currentIdx === 0}
-                onClick={() => onRegenerate("prev", currentIdx - 1)}
-                className="hover:text-foreground disabled:opacity-30"
-              >‹</button>
+              <button disabled={currentIdx === 0} onClick={() => onRegenerate("prev", currentIdx - 1)}
+                className="hover:text-foreground disabled:opacity-30">‹</button>
               <span>{currentIdx + 1} / {versions.length}</span>
-              <button
-                disabled={currentIdx === versions.length - 1}
-                onClick={() => onRegenerate("next", currentIdx + 1)}
-                className="hover:text-foreground disabled:opacity-30"
-              >›</button>
+              <button disabled={currentIdx === versions.length - 1} onClick={() => onRegenerate("next", currentIdx + 1)}
+                className="hover:text-foreground disabled:opacity-30">›</button>
             </div>
           )}
-          <button
-            onClick={() => onRegenerate("regenerate")}
-            className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
-          >
+          <button onClick={() => onRegenerate("regenerate")}
+            className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
             ↻ Regenerate
           </button>
-          {message.messageIndex != null && (
-            <FeedbackButtons message={message} activeId={activeId} />
-          )}
+          {message.messageIndex != null && <FeedbackButtons message={message} activeId={activeId} />}
         </div>
       )}
 
@@ -368,6 +440,7 @@ function Sidebar({ conversations, activeId, onSelect, onNewChat }) {
 export default function App() {
   const [conversations, setConversations] = useState([]);
   const [activeId, setActiveId] = useState(null);
+  const [activeTitle, setActiveTitle] = useState("New Conversation");
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -387,14 +460,14 @@ export default function App() {
   async function handleSelectConversation(id) {
     setActiveId(id);
     const convo = await fetchConversation(id);
+    setActiveTitle(convo.title);
     setMessages(convo.messages.map((m, i) => {
       if (m.role === "assistant") {
         return {
           id: i, role: "assistant",
           versions: m.versions || [{ content: m.content || "", sources: m.sources || [] }],
           currentVersion: m.current_version ?? 0,
-          streaming: false,
-          messageIndex: i,
+          streaming: false, messageIndex: i,
         };
       }
       return { id: i, role: "user", content: m.content, sources: [], streaming: false, messageIndex: i };
@@ -405,6 +478,7 @@ export default function App() {
     const convo = await createConversation("New Conversation");
     setConversations((prev) => [convo, ...prev]);
     setActiveId(convo.id);
+    setActiveTitle(convo.title);
     setMessages([]);
     setInput("");
   }
@@ -418,6 +492,7 @@ export default function App() {
       const convo = await createConversation("New Conversation");
       setConversations((prev) => [convo, ...prev]);
       setActiveId(convo.id);
+      setActiveTitle(convo.title);
       convId = convo.id;
     }
 
@@ -426,9 +501,7 @@ export default function App() {
     const assistantMsg = {
       id: assistantId, role: "assistant",
       versions: [{ content: "", sources: [] }],
-      currentVersion: 0,
-      streaming: true,
-      messageIndex: null,
+      currentVersion: 0, streaming: true, messageIndex: null,
     };
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
@@ -440,9 +513,7 @@ export default function App() {
       onSources: (sources) => {
         setLoadingStage("generating");
         setMessages((prev) => prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, versions: [{ content: m.versions[0].content, sources }] }
-            : m
+          m.id === assistantId ? { ...m, versions: [{ content: m.versions[0].content, sources }] } : m
         ));
       },
       onToken: (token) => {
@@ -454,6 +525,7 @@ export default function App() {
         ));
       },
       onTitle: (title, cid) => {
+        setActiveTitle(title);
         setConversations((prev) => prev.map((c) => c.id === cid ? { ...c, title } : c));
       },
       onDone: (msgIndex) => {
@@ -477,9 +549,7 @@ export default function App() {
     if (action === "prev" || action === "next") {
       setMessages((prev) => prev.map((m) => {
         if (m.id !== messageId) return m;
-        if (m.messageIndex != null && activeId) {
-          setMessageVersion(activeId, m.messageIndex, versionIdx);
-        }
+        if (m.messageIndex != null && activeId) setMessageVersion(activeId, m.messageIndex, versionIdx);
         return { ...m, currentVersion: versionIdx };
       }));
       return;
@@ -560,8 +630,12 @@ export default function App() {
       <div className="flex flex-col flex-1 min-w-0">
         <header className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h1 className="text-lg font-semibold tracking-tight">RAG Chat</h1>
-          <Button variant="outline" size="sm" onClick={() => setShowTour(true)}>? Tour</Button>
+          <div className="flex items-center gap-2">
+            <ExportMenu title={activeTitle} messages={messages} />
+            <Button variant="outline" size="sm" onClick={() => setShowTour(true)}>? Tour</Button>
+          </div>
         </header>
+
         <main className="flex-1 overflow-y-auto px-6 py-6">
           <div className="max-w-2xl mx-auto flex flex-col gap-4">
             {messages.length === 0 && !isLoading && (
@@ -581,6 +655,7 @@ export default function App() {
             <div ref={bottomRef} />
           </div>
         </main>
+
         <footer className="border-t border-border px-6 py-4">
           <div className="max-w-2xl mx-auto flex gap-3 items-end">
             <textarea
