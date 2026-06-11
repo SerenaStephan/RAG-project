@@ -30,6 +30,25 @@ export async function setMessageVersion(conversationId, messageIndex, versionInd
   });
 }
 
+export async function submitFeedback({ conversationId, messageIndex, versionIndex, rating, reason }) {
+  const res = await fetch(`${API_BASE}/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      conversation_id: conversationId,
+      message_index: messageIndex,
+      version_index: versionIndex,
+      rating,
+      reason: reason || null,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to submit feedback");
+  }
+  return res.json();
+}
+
 async function streamRequest(url, body, { onToken, onSources, onTitle, onDone, onError }) {
   try {
     const response = await fetch(url, {

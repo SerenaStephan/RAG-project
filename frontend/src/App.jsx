@@ -8,16 +8,26 @@ import {
   fetchConversation,
   regenerateMessage,
   setMessageVersion,
+  submitFeedback,
 } from "@/lib/ragApi";
 
-// ── Custom Tour ───────────────────────────────────────────────────────────────
+const FEEDBACK_REASONS = [
+  "Wrong answer",
+  "Too vague",
+  "Hallucination",
+  "Missing sources",
+  "Off topic",
+  "Other",
+];
+
 const TOUR_STEPS = [
   { title: "Conversation History", body: "All your past chats are saved here automatically." },
   { title: "New Chat", body: "Click '+ New Chat' to start a fresh conversation." },
   { title: "Ask a Question", body: "Type your question and press Enter to send." },
-  { title: "Regenerate", body: "Click ↻ on any response to regenerate it. Use ‹ › to switch between versions." },
+  { title: "Regenerate & Feedback", body: "Click ↻ to regenerate. Use 👍 👎 to rate responses. 👎 requires a reason." },
 ];
 
+// ── Tour ──────────────────────────────────────────────────────────────────────
 function Tour({ onClose }) {
   const [step, setStep] = useState(0);
   const current = TOUR_STEPS[step];
@@ -49,7 +59,6 @@ function CitationBadge({ num, sources }) {
   const [visible, setVisible] = useState(false);
   const source = sources?.[num - 1];
   if (!source) return <span className="text-xs text-muted-foreground">[{num}]</span>;
-
   return (
     <span className="relative inline-block">
       <button
@@ -73,16 +82,14 @@ function CitationBadge({ num, sources }) {
   );
 }
 
-// ── Collapsible sources panel ─────────────────────────────────────────────────
+// ── Sources panel ─────────────────────────────────────────────────────────────
 function SourcesPanel({ sources }) {
   const [open, setOpen] = useState(false);
   if (!sources?.length) return null;
   return (
     <div className="mt-2 max-w-[75%]">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-      >
+      <button onClick={() => setOpen(!open)}
+        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
         <span>{open ? "▾" : "▸"}</span>
         <span>{sources.length} source{sources.length > 1 ? "s" : ""}</span>
       </button>
@@ -123,6 +130,141 @@ function CitedMarkdown({ content, streaming, sources }) {
   );
 }
 
+// ── Other reason input ────────────────────────────────────────────────────────
+function OtherReasonInput({ onSubmit, onCancel }) {
+  const [text, setText] = useState("");
+  return (
+    <div className="flex flex-col gap-1 px-2 py-1">
+      <input
+        autoFocus
+        className="text-xs border border-input rounded-lg px-2 py-1 bg-background
+                   focus:outline-none focus:ring-1 focus:ring-ring"
+        placeholder="Describe the issue…"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && text.trim()) onSubmit(text.trim());
+          if (e.key === "Escape") onCancel();
+        }}
+      />
+      <div className="flex gap-1 justify-end">
+        <button onClick={onCancel}
+          className="text-[10px] text-muted-foreground hover:text-foreground">
+          Cancel
+        </button>
+        <button
+          disabled={!text.trim()}
+          onClick={() => onSubmit(text.trim())}
+          className="text-[10px] text-primary hover:underline disabled:opacity-30"
+        >
+          Submit
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Feedback buttons ──────────────────────────────────────────────────────────
+function FeedbackButtons({ message, activeId }) {
+  const [status, setStatus] = useState(null);
+  const [showReasons, setShowReasons] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const currentVersion = message.currentVersion ?? 0;
+
+  async function handleUp() {
+    if (status || submitting) return;
+    setSubmitting(true);
+    try {
+      await submitFeedback({
+        conversationId: activeId,
+        messageIndex: message.messageIndex,
+        versionIndex: currentVersion,
+        rating: "up",
+        reason: null,
+      });
+      setStatus("up");
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleReason(reason) {
+    setShowReasons(false);
+    setSubmitting(true);
+    try {
+      await submitFeedback({
+        conversationId: activeId,
+        messageIndex: message.messageIndex,
+        versionIndex: currentVersion,
+        rating: "down",
+        reason,
+      });
+      setStatus("down");
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="relative flex items-center gap-1">
+      <button
+        onClick={handleUp}
+        disabled={submitting || status !== null}
+        className={`text-base transition-all ${
+          status === "up" ? "opacity-100" : "opacity-40 hover:opacity-100"
+        } disabled:cursor-default`}
+        title="Good response"
+      >
+        👍
+      </button>
+      <button
+        onClick={() => !status && !submitting && setShowReasons(true)}
+        disabled={submitting || status !== null}
+        className={`text-base transition-all ${
+          status === "down" ? "opacity-100" : "opacity-40 hover:opacity-100"
+        } disabled:cursor-default`}
+        title="Bad response"
+      >
+        👎
+      </button>
+
+      {showReasons && (
+        <div className="absolute bottom-full left-0 mb-2 z-50 bg-popover border border-border
+                        rounded-xl shadow-lg p-2 flex flex-col gap-1 w-52">
+          <p className="text-xs font-semibold text-foreground px-2 py-1">Why was this bad?</p>
+          {FEEDBACK_REASONS.map((reason) =>
+            reason === "Other" ? (
+              <OtherReasonInput
+                key={reason}
+                onSubmit={handleReason}
+                onCancel={() => setShowReasons(false)}
+              />
+            ) : (
+              <button
+                key={reason}
+                onClick={() => handleReason(reason)}
+                className="text-left text-xs px-2 py-1.5 rounded-lg hover:bg-muted transition-colors text-foreground"
+              >
+                {reason}
+              </button>
+            )
+          )}
+          <button
+            onClick={() => setShowReasons(false)}
+            className="text-left text-xs px-2 py-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Loading indicator ─────────────────────────────────────────────────────────
 function ThinkingIndicator({ stage }) {
   const stages = {
@@ -143,7 +285,7 @@ function ThinkingIndicator({ stage }) {
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────────
-function MessageBubble({ message, onRegenerate }) {
+function MessageBubble({ message, onRegenerate, activeId }) {
   const isUser = message.role === "user";
   const versions = message.versions || [{ content: message.content, sources: message.sources }];
   const currentIdx = message.currentVersion ?? 0;
@@ -165,10 +307,8 @@ function MessageBubble({ message, onRegenerate }) {
         )}
       </div>
 
-      {/* Assistant controls */}
       {!isUser && !message.streaming && (
-        <div className="flex items-center gap-2 px-1">
-          {/* Version switcher */}
+        <div className="flex items-center gap-3 px-1">
           {versions.length > 1 && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <button
@@ -184,13 +324,15 @@ function MessageBubble({ message, onRegenerate }) {
               >›</button>
             </div>
           )}
-          {/* Regenerate button */}
           <button
             onClick={() => onRegenerate("regenerate")}
             className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
           >
             ↻ Regenerate
           </button>
+          {message.messageIndex != null && (
+            <FeedbackButtons message={message} activeId={activeId} />
+          )}
         </div>
       )}
 
@@ -248,8 +390,7 @@ export default function App() {
     setMessages(convo.messages.map((m, i) => {
       if (m.role === "assistant") {
         return {
-          id: i,
-          role: "assistant",
+          id: i, role: "assistant",
           versions: m.versions || [{ content: m.content || "", sources: m.sources || [] }],
           currentVersion: m.current_version ?? 0,
           streaming: false,
@@ -334,7 +475,6 @@ export default function App() {
 
   async function handleRegenerate(messageId, action, versionIdx) {
     if (action === "prev" || action === "next") {
-      // Switch version locally and persist to DB
       setMessages((prev) => prev.map((m) => {
         if (m.id !== messageId) return m;
         if (m.messageIndex != null && activeId) {
@@ -345,7 +485,6 @@ export default function App() {
       return;
     }
 
-    // Find the message and its preceding user message
     const msgIdx = messages.findIndex((m) => m.id === messageId);
     if (msgIdx < 1) return;
     const userMsg = messages[msgIdx - 1];
@@ -355,17 +494,15 @@ export default function App() {
     const query = userMsg.content;
     const convId = activeId;
     const dbMsgIndex = assistantMsg.messageIndex;
+    const newVersionIdx = assistantMsg.versions.length;
 
-    // Start streaming new version
     setMessages((prev) => prev.map((m) =>
       m.id === messageId
-        ? { ...m, streaming: true, versions: [...m.versions, { content: "", sources: [] }], currentVersion: m.versions.length }
+        ? { ...m, streaming: true, versions: [...m.versions, { content: "", sources: [] }], currentVersion: newVersionIdx }
         : m
     ));
     setIsLoading(true);
     setLoadingStage("retrieving");
-
-    const newVersionIdx = assistantMsg.versions.length; // index of new version
 
     await regenerateMessage(query, convId, dbMsgIndex, {
       onSources: (sources) => {
@@ -414,20 +551,17 @@ export default function App() {
   return (
     <div className="flex h-screen bg-background text-foreground">
       {showTour && <Tour onClose={() => setShowTour(false)} />}
-
       <Sidebar
         conversations={conversations}
         activeId={activeId}
         onSelect={handleSelectConversation}
         onNewChat={handleNewChat}
       />
-
       <div className="flex flex-col flex-1 min-w-0">
         <header className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h1 className="text-lg font-semibold tracking-tight">RAG Chat</h1>
           <Button variant="outline" size="sm" onClick={() => setShowTour(true)}>? Tour</Button>
         </header>
-
         <main className="flex-1 overflow-y-auto px-6 py-6">
           <div className="max-w-2xl mx-auto flex flex-col gap-4">
             {messages.length === 0 && !isLoading && (
@@ -439,6 +573,7 @@ export default function App() {
               <MessageBubble
                 key={msg.id}
                 message={msg}
+                activeId={activeId}
                 onRegenerate={(action, versionIdx) => handleRegenerate(msg.id, action, versionIdx)}
               />
             ))}
@@ -446,7 +581,6 @@ export default function App() {
             <div ref={bottomRef} />
           </div>
         </main>
-
         <footer className="border-t border-border px-6 py-4">
           <div className="max-w-2xl mx-auto flex gap-3 items-end">
             <textarea
