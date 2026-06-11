@@ -18,7 +18,7 @@ const TOUR_STEPS = [
   { title: "New Chat", body: "Click '+ New Chat' to start a fresh conversation." },
   { title: "Ask a Question", body: "Type your question and press Enter to send." },
   { title: "Regenerate & Compare", body: "Click ↻ to regenerate or ⇔ Compare to view two versions side by side." },
-  { title: "Export & Read Aloud", body: "Export the conversation as Markdown or PDF. Click 🔊 to have the response read aloud." },
+  { title: "Export, Read & Copy", body: "Export as Markdown/PDF, click 🔊 to read aloud, or 📋 to copy the response." },
 ];
 
 // ── Export helpers ────────────────────────────────────────────────────────────
@@ -249,7 +249,6 @@ function SpeakButton({ content }) {
       .replace(/#{1,6} /g, "")
       .replace(/- /g, "")
       .trim();
-
     const utterance = new SpeechSynthesisUtterance(clean);
     utterance.onend = () => setSpeaking(false);
     utterance.onerror = () => setSpeaking(false);
@@ -257,17 +256,37 @@ function SpeakButton({ content }) {
     setSpeaking(true);
   }
 
-  useEffect(() => {
-    return () => window.speechSynthesis.cancel();
-  }, []);
+  useEffect(() => { return () => window.speechSynthesis.cancel(); }, []);
 
   return (
-    <button
-      onClick={handleSpeak}
+    <button onClick={handleSpeak}
       className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-      title={speaking ? "Stop reading" : "Read aloud"}
-    >
+      title={speaking ? "Stop reading" : "Read aloud"}>
       {speaking ? "⏹ Stop" : "🔊 Read"}
+    </button>
+  );
+}
+
+// ── Copy button ───────────────────────────────────────────────────────────────
+function CopyButton({ content }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    const clean = content
+      .replace(/\[(\d+)\]/g, "")
+      .replace(/\*\*/g, "")
+      .replace(/#{1,6} /g, "")
+      .trim();
+    await navigator.clipboard.writeText(clean);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <button onClick={handleCopy}
+      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+      title="Copy response">
+      {copied ? "✓ Copied" : "📋 Copy"}
     </button>
   );
 }
@@ -398,6 +417,7 @@ function MessageBubble({ message, onRegenerate, onCompare, onKeepVersion, active
             className="text-xs text-muted-foreground hover:text-foreground transition-colors">⇔ Compare</button>
           {message.messageIndex != null && <FeedbackButtons message={message} activeId={activeId} />}
           <SpeakButton content={current.content} />
+          <CopyButton content={current.content} />
         </div>
       )}
 

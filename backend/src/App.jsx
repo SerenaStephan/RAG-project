@@ -241,3 +241,28 @@ export default function App() {
     </div>
   );
 }
+
+function CopyButton({ content }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    const clean = content
+      .replace(/\[(\d+)\]/g, "")
+      .replace(/\*\*/g, "")
+      .replace(/#{1,6} /g, "")
+      .trim();
+    await navigator.clipboard.writeText(clean);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+      title="Copy response"
+    >
+      {copied ? "✓ Copied" : "📋 Copy"}
+    </button>
+  );
+}
