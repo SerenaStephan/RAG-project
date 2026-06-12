@@ -22,6 +22,10 @@ export async function fetchConversation(id) {
   return res.json();
 }
 
+export async function deleteConversation(id) {
+  await fetch(`${API_BASE}/conversations/${id}`, { method: "DELETE" });
+}
+
 export async function setMessageVersion(conversationId, messageIndex, versionIndex) {
   await fetch(`${API_BASE}/conversations/${conversationId}/messages/${messageIndex}/version`, {
     method: "POST",

@@ -46,6 +46,10 @@ async def get_conversation(conversation_id: str) -> dict | None:
     return None
 
 
+async def delete_conversation(conversation_id: str) -> None:
+    await conversations_col.delete_one({"_id": ObjectId(conversation_id)})
+
+
 async def append_message(conversation_id: str, role: str, content: str, sources: list) -> None:
     if role == "assistant":
         message = {
@@ -112,8 +116,8 @@ async def save_feedback(
     conversation_id: str,
     message_index: int,
     version_index: int,
-    rating: str,        # "up" or "down"
-    reason: str | None, # required for "down"
+    rating: str,
+    reason: str | None,
 ) -> dict:
     doc = {
         "conversation_id": conversation_id,
