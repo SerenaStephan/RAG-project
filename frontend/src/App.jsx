@@ -6,6 +6,7 @@ import {
   createConversation,
   fetchConversations,
   fetchConversation,
+  deleteConversation,
   regenerateMessage,
   setMessageVersion,
   submitFeedback,
@@ -18,33 +19,28 @@ const TOUR_STEPS = [
   { title: "New Chat", body: "Click '+ New Chat' to start a fresh conversation." },
   { title: "Ask a Question", body: "Type your question and press Enter to send." },
   { title: "Regenerate & Compare", body: "Click ↻ to regenerate or ⇔ Compare to view two versions side by side." },
-  { title: "Generate Slides", body: "Click 🎯 Slides in the header, type a topic, and download a PowerPoint presentation built from your documents." },
+  { title: "Generate Slides", body: "Click Slides in the header, type a topic, and download a PowerPoint presentation." },
 ];
 
 // ── Generate Slides modal ─────────────────────────────────────────────────────
 function SlidesModal({ onClose }) {
   const [topic, setTopic] = useState("");
-  const [status, setStatus] = useState("idle"); // idle | generating | done | error
+  const [status, setStatus] = useState("idle");
   const [errorMsg, setErrorMsg] = useState("");
 
   async function handleGenerate() {
     if (!topic.trim()) return;
-    setStatus("generating");
-    setErrorMsg("");
-
+    setStatus("generating"); setErrorMsg("");
     try {
       const res = await fetch("http://localhost:8000/presentation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ topic: topic.trim() }),
       });
-
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `Server error: ${res.status}`);
       }
-
-      // Trigger download
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -56,8 +52,7 @@ function SlidesModal({ onClose }) {
       URL.revokeObjectURL(url);
       setStatus("done");
     } catch (err) {
-      setErrorMsg(err.message);
-      setStatus("error");
+      setErrorMsg(err.message); setStatus("error");
     }
   }
 
@@ -65,25 +60,19 @@ function SlidesModal({ onClose }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
       <div className="bg-background border border-border rounded-2xl shadow-xl p-6 w-full max-w-md flex flex-col gap-4">
         <div className="flex items-center justify-between">
-          <h2 className="font-semibold text-base">🎯 Generate Slides</h2>
+          <h2 className="font-semibold text-base">Generate Slides</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-sm">✕</button>
         </div>
-
         <p className="text-sm text-muted-foreground">
           Enter a topic and we'll retrieve relevant content from your documents and build a PowerPoint presentation.
         </p>
-
-        <input
-          autoFocus
-          className="border border-input rounded-xl px-4 py-3 text-sm bg-background
-                     focus:outline-none focus:ring-2 focus:ring-ring"
+        <input autoFocus
+          className="border border-input rounded-xl px-4 py-3 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring"
           placeholder="e.g. CIS Controls safeguards overview"
-          value={topic}
-          onChange={(e) => setTopic(e.target.value)}
+          value={topic} onChange={(e) => setTopic(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleGenerate()}
           disabled={status === "generating"}
         />
-
         {status === "generating" && (
           <div className="flex flex-col gap-2">
             <p className="text-xs text-muted-foreground italic">Retrieving content and building slides…</p>
@@ -92,19 +81,11 @@ function SlidesModal({ onClose }) {
             </div>
           </div>
         )}
-
-        {status === "done" && (
-          <p className="text-sm text-green-600">✓ Slides downloaded successfully!</p>
-        )}
-
-        {status === "error" && (
-          <p className="text-sm text-red-500">Error: {errorMsg}</p>
-        )}
-
+        {status === "done" && <p className="text-sm text-green-600">✓ Slides downloaded successfully!</p>}
+        {status === "error" && <p className="text-sm text-red-500">Error: {errorMsg}</p>}
         <div className="flex gap-2 justify-end">
           <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" onClick={handleGenerate}
-            disabled={!topic.trim() || status === "generating"}>
+          <Button size="sm" onClick={handleGenerate} disabled={!topic.trim() || status === "generating"}>
             {status === "generating" ? "Generating…" : "Generate"}
           </Button>
         </div>
@@ -351,7 +332,7 @@ function CopyButton({ content }) {
     setTimeout(() => setCopied(false), 2000);
   }
   return (
-    <button onClick={handleCopy} className="text-xs text-muted-foreground hover:text-foreground transition-colors" title="Copy response">
+    <button onClick={handleCopy} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
       {copied ? "✓ Copied" : "📋 Copy"}
     </button>
   );
@@ -487,7 +468,8 @@ function MessageBubble({ message, onRegenerate, onCompare, onKeepVersion, active
   );
 }
 
-function Sidebar({ conversations, activeId, onSelect, onNewChat, open, onClose }) {
+// ── Sidebar with delete ───────────────────────────────────────────────────────
+function Sidebar({ conversations, activeId, onSelect, onNewChat, onDelete, open, onClose }) {
   return (
     <>
       {open && <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={onClose} />}
@@ -503,11 +485,19 @@ function Sidebar({ conversations, activeId, onSelect, onNewChat, open, onClose }
             <p className="text-xs text-muted-foreground text-center mt-4">No conversations yet</p>
           )}
           {conversations.map((c) => (
-            <button key={c.id} onClick={() => { onSelect(c.id); onClose(); }}
-              className={`w-full text-left px-3 py-2 rounded-lg text-sm truncate transition-colors
-                ${activeId===c.id ? "bg-primary text-primary-foreground" : "hover:bg-muted text-foreground"}`}>
-              {c.title}
-            </button>
+            <div key={c.id} className="flex items-center gap-1 group">
+              <button onClick={() => { onSelect(c.id); onClose(); }}
+                className={`flex-1 text-left px-3 py-2 rounded-lg text-sm truncate transition-colors
+                  ${activeId===c.id ? "bg-primary text-primary-foreground" : "hover:bg-muted text-foreground"}`}>
+                {c.title}
+              </button>
+              <button
+                onClick={() => onDelete(c.id)}
+                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 px-1.5 py-1 text-xs rounded transition-all"
+                title="Delete conversation">
+                ✕
+              </button>
+            </div>
           ))}
         </div>
       </aside>
@@ -551,6 +541,16 @@ export default function App() {
     setConversations((prev) => [convo, ...prev]);
     setActiveId(convo.id); setActiveTitle(convo.title);
     setMessages([]); setInput("");
+  }
+
+  async function handleDeleteConversation(id) {
+    await deleteConversation(id);
+    setConversations((prev) => prev.filter((c) => c.id !== id));
+    if (activeId === id) {
+      setActiveId(null);
+      setActiveTitle("New Conversation");
+      setMessages([]);
+    }
   }
 
   async function handleSend() {
@@ -683,6 +683,7 @@ export default function App() {
 
       <Sidebar conversations={conversations} activeId={activeId}
         onSelect={handleSelectConversation} onNewChat={handleNewChat}
+        onDelete={handleDeleteConversation}
         open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className="flex flex-col flex-1 min-w-0">
@@ -691,7 +692,7 @@ export default function App() {
             className="md:hidden p-1 text-muted-foreground hover:text-foreground text-lg">☰</button>
           <h1 className="text-lg font-semibold tracking-tight flex-1 md:flex-none">RAG Chat</h1>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setShowSlides(true)}>🎯 Slides</Button>
+            <Button variant="outline" size="sm" onClick={() => setShowSlides(true)}>Slides</Button>
             <ExportMenu title={activeTitle} messages={messages} />
             <Button variant="outline" size="sm" onClick={() => setShowTour(true)}>? Tour</Button>
           </div>
